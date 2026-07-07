@@ -97,13 +97,25 @@ function validateDiff(file) {
   if (/^[-+].*(npm test|node --check|validation|validate)/mi.test(git(["diff", base]))) console.warn("WARNING: validation-related lines changed; human review required.");
   if (errors.length) fail(errors); ok(`Diff gate passed against ${base}: ${files.length} file(s), ${lines} changed line(s), all within approved scope or agent state.`);
 }
+function normalizeResult(file) {
+  const resultFile = rel(path.relative(root, path.resolve(root, file)));
+  const validationFile = ".agent/runtime/validation-results.json";
+  if (!fs.existsSync(abs(validationFile))) throw new Error("deterministic validation results are missing; refusing to trust model-reported validation");
+  const r = JSON.parse(fs.readFileSync(path.resolve(root, file), "utf8"));
+  const observed = readJson(validationFile);
+  if (!Array.isArray(observed) || observed.length === 0) throw new Error("deterministic validation results are empty; refusing to normalize runtime result");
+  r.validation = observed;
+  if (observed.some((v) => v.outcome !== "passed" || Number(v.exit_code) !== 0)) r.outcome = "failed";
+  writeJson(resultFile, r);
+  return r;
+}
 function validateResult(file) {
-  const r = JSON.parse(fs.readFileSync(path.resolve(root, file), "utf8")); const errors = [];
+  const r = normalizeResult(file); const errors = [];
   for (const k of ["cycle_id","runtime","implementation_summary","changed_files","validation","outcome","known_limitations","recommended_next_direction"]) if (r[k] === undefined || r[k] === null || r[k] === "" || (Array.isArray(r[k]) && k !== "changed_files" && r[k].length === 0)) errors.push(`result missing required field: ${k}`);
   if (!["success","failed","blocked","no_safe_improvement"].includes(r.outcome)) errors.push("result outcome is outside strict enum");
   if ((r.validation || []).some((v) => v.outcome === "failed" || Number(v.exit_code) !== 0) && r.outcome === "success") errors.push("failed validation cannot be represented as success");
   if (r.outcome === "success" && (!Array.isArray(r.changed_files) || r.changed_files.length === 0)) errors.push("success result cannot have an empty changed_files list");
-  if (errors.length) fail(errors); ok(`Result gate passed for ${r.cycle_id} with outcome=${r.outcome}.`);
+  if (errors.length) fail(errors); ok(`Result gate passed for ${r.cycle_id} with outcome=${r.outcome}; validation normalized from deterministic observations.`);
 }
 const [stage, file] = process.argv.slice(2);
 try {

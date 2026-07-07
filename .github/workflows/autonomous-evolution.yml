@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  prepare-autonomous-context:
-    name: Prepare autonomous agent context
+  autonomous-cycle:
+    name: Prepare and gate autonomous cycle
     runs-on: ubuntu-latest
 
     steps:
@@ -22,25 +22,32 @@ jobs:
         with:
           node-version: 20
 
-      - name: Validate context generator syntax
-        run: node --check scripts/autonomous-agent-context.js
+      - name: Validate autonomous scripts
+        run: |
+          node --check scripts/autonomous-agent-context.js
+          node --check scripts/agent-gatekeeper.js
+          node --check scripts/agent-runtime-adapter.js
+          node --check scripts/agent-cycle.js
 
-      - name: Validate decision history JSON
-        run: node -e "JSON.parse(require('fs').readFileSync('.agent/DAILY_DECISIONS.json', 'utf8')); console.log('DAILY_DECISIONS.json is valid JSON')"
+      - name: Validate agent JSON state and schemas
+        run: |
+          node -e "for (const f of ['.agent/DAILY_DECISIONS.json','.agent/schemas/decision.schema.json','.agent/schemas/runtime-result.schema.json','.agent/runtime/config.json']) { JSON.parse(require('fs').readFileSync(f, 'utf8')); console.log(f + ' is valid JSON'); }"
 
       - name: Generate autonomous agent context
         run: node scripts/autonomous-agent-context.js
 
-      - name: Verify generated context exists
-        run: |
-          test -s .agent/generated/AGENT_CONTEXT.md
-          test -s .agent/generated/AGENT_CONTEXT.json
+      - name: Run deterministic input gate
+        run: node scripts/agent-gatekeeper.js input
 
-      - name: Document future coding-agent runtime connection
+      - name: Execute one gated agent cycle
+        run: node scripts/agent-cycle.js
+
+      - name: Report disabled runtime status
+        if: always()
         run: |
-          cat <<'MESSAGE'
-          Version 1 prepares and validates autonomous agent context only.
-          A real unattended implementation cycle still requires a secure coding-agent runtime such as OpenHands, Codex, or another approved agent runner.
-          That runtime must receive scoped credentials/API access through GitHub Actions secrets, create an isolated branch, select exactly one improvement, implement it, validate it, update .agent memory files, and open a pull request.
-          This workflow intentionally does not fake LLM behavior or randomly edit application code.
-          MESSAGE
+          if test -f .agent/runtime/runtime-result.json; then
+            node -e "const r = JSON.parse(require('fs').readFileSync('.agent/runtime/runtime-result.json','utf8')); console.log('runtime=' + r.runtime); console.log('outcome=' + r.outcome); console.log(r.implementation_summary);"
+          else
+            echo "No runtime result was produced."
+          fi
+          echo "Phase 2A does not pretend implementation occurred when runtime mode is disabled."

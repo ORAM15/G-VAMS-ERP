@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "runtime_mode": "disabled",
+  "provider": "gemini",
+  "model": null,
+  "diff_thresholds": {
+    "max_changed_files": 12,
+    "max_line_changes": 500
+  }
+}

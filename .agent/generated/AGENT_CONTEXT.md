@@ -7,13 +7,13 @@ This context intentionally omits wall-clock timestamps, `.env` files, tokens, pr
 ## Git
 
 - Branch: work
-- Current SHA: 9c8b022e769185699be182d8333f3493432a3a56
+- Current SHA: 20f355db76808bbe80096c1bfd63ca1d3d0caede
 - Recent commits:
+  - Merge autonomous evolution agent infrastructure
+  - Add autonomous evolution agent infrastructure
   - Update project health report
   - Merge project health automation
   - Add project health automation
-  - Remove title and overview from README
-  - Added project README and contributor details
 
 ## projectVision
 
@@ -440,6 +440,8 @@ The GitHub Actions workflow runs this same health generator, verifies the fronte
 
 ## Important directories
 
+- .agent/runtime
+- .agent/schemas
 - .github/workflows
 - backend/controllers
 - backend/middleware

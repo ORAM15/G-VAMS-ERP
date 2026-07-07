@@ -16,13 +16,11 @@ jobs:
 
     steps:
       - name: Checkout repository
-        # actions/checkout v4; pin to a reviewed SHA in a follow-up lockfile refresh if GitHub rotates this action.
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Set up Node.js
-        # actions/setup-node v4; Node itself is pinned to the major used by the repository checks.
         uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -47,18 +45,10 @@ jobs:
           fi
           echo "AGENT_LLM_MODEL=${{ vars.AGENT_LLM_MODEL }}" >> "$GITHUB_ENV"
 
-      - name: Install pinned OpenHands runtime when explicitly activated
-        if: env.AGENT_RUNTIME_MODE == 'openhands'
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install openhands==1.16.0
-          openhands --version
-          openhands --help | head -80
-
       - name: Input Gate
         run: node scripts/agent-gatekeeper.js input
 
-      - name: Decision Runtime
+      - name: Direct Gemini Decision Runtime
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: node scripts/agent-runtime-adapter.js decision
@@ -66,6 +56,13 @@ jobs:
       - name: Decision Gate
         if: env.AGENT_RUNTIME_MODE == 'openhands'
         run: node scripts/agent-gatekeeper.js decision .agent/runtime/current-decision.json
+
+      - name: Install pinned OpenHands implementation runtime after decision approval
+        if: env.AGENT_RUNTIME_MODE == 'openhands'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install openhands==1.16.0
+          openhands --version
 
       - name: Implementation Runtime
         if: env.AGENT_RUNTIME_MODE == 'openhands'

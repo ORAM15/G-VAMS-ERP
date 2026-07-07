@@ -12,3 +12,9 @@ frontend/build/
 # misc
 .DS_Store
 npm-debug.log
+# autonomous runtime ephemeral logs and prompts
+.agent/runtime/*-openhands.jsonl
+.agent/runtime/*-task.txt
+.agent/runtime/planned-validation.json
+.agent/runtime/validation-results.json
+.agent/runtime/pr-body.md

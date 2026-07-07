@@ -1,31 +1,30 @@
-# Phase 2A Runtime Bridge
+# Autonomous Runtime Activation
 
-Phase 2A adds a deterministic runtime boundary for a future unattended G-VAMS coding loop. It does **not** connect a real OpenHands/Gemini implementation runtime yet.
+Phase 2B wires the existing deterministic control plane to a pinned OpenHands headless runtime while keeping `runtime_mode` disabled by default.
 
-## Current runtime status
+## Verified upstream interface
 
-` .agent/runtime/config.json ` sets `runtime_mode` to `disabled`. In disabled mode, `scripts/agent-runtime-adapter.js` writes a blocked `runtime-result.json`, exits safely, and performs no coding-agent execution.
+The selected interface is the historical `openhands` CLI headless mode from OpenHands. Current docs describe headless mode for scripting, automation, and CI/CD; require `--task` or `--file`; show `openhands --headless -t "..."` and `openhands --headless -f task.txt`; document `--json` as JSONL event output; and state that headless mode always runs in always-approve mode. The Gemini docs state that OpenHands uses LiteLLM for Google chat models and that custom Gemini model identifiers use `gemini/<model-name>` such as `gemini/gemini-2.0-flash`.
 
-## OpenHands integration status
+## Pinned runtime
 
-OpenHands is the preferred future runtime, but this Phase 2A repository change does not claim a verified unattended OpenHands invocation. The adapter fails closed rather than inventing commands, container tags, API endpoints, provider variables, or model names.
+- Package/interface: `openhands` CLI.
+- Pinned version: `1.16.0`.
+- Reproducible install command used by the workflow: `python -m pip install openhands==1.16.0`.
+- Runtime invocation: `openhands --override-with-envs --headless --json -f .agent/runtime/<stage>-task.txt`.
 
-### Phase 2B activation checklist
+The adapter fails closed if the installed `openhands --version` output does not include `1.16.0`.
 
-Before enabling `runtime_mode: "openhands"`, a human-supervised infrastructure PR must verify and document:
+## Required GitHub settings for one manual supervised cycle
 
-1. The exact supported OpenHands unattended CLI or container invocation.
-2. The exact configuration mechanism for selecting a Gemini-compatible provider and model.
-3. Immutable action/container version pinning strategy.
-4. GitHub-hosted runner sandbox assumptions and limitations.
-5. Required GitHub secrets and repository variables.
-6. A staged execution path that produces the decision artifact, waits for `node scripts/agent-gatekeeper.js decision`, then implements.
-7. A successful end-to-end dry run that does not expose credentials.
+1. Secret `GEMINI_API_KEY` containing the Google Gemini API key.
+2. Repository variable `AGENT_LLM_MODEL` containing a LiteLLM Gemini model identifier, for example `gemini/gemini-2.0-flash`.
+3. Repository variable `AGENT_RUNTIME_MODE` set to `openhands`.
 
-## Gemini provider status
+Scheduled runs remain observation/disabled-only during Phase 2B. After one successful manual supervised cycle, maintainers may intentionally change the schedule guard in `.github/workflows/autonomous-evolution.yml` to permit scheduled coding.
 
-Gemini is the preferred initial provider, but no Gemini API key, model identifier, free-tier assumption, or SDK behavior is committed here. Model selection remains configurable in `.agent/runtime/config.json` and should be overridden by repository variables only after current provider documentation is verified.
+## Safety controls
 
-## External model data-processing warning
+The cycle records `.agent/runtime/base-state.json` at start. Diff enforcement compares the effective implementation delta to that trusted base SHA using `git diff <base> --name-only`, `git diff <base> --numstat`, and separate untracked-file inspection. Staging or runtime-created commits cannot hide changes because committed, staged, and unstaged tracked changes are compared against the same trusted base.
 
-The input gate excludes and scans for obvious secrets before generated context is sent to any future model. Even after scanning, repository source and agent context sent to an external model provider are still external data processing and must be approved by maintainers.
+Validation commands are policy-checked and run with `shell: false`. The policy rejects shell chaining, pipes, redirection, command substitution, curl/wget, publishing, credential commands, destructive filesystem commands, and arbitrary interpreters. It accepts only controlled repository checks such as `node --check scripts/<file>.js` and selected `npm --prefix frontend|backend run build|test|lint` forms.

@@ -6,43 +6,113 @@ on:
     - cron: "42 3 * * *"
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
 
 jobs:
   autonomous-cycle:
-    name: Prepare and gate autonomous cycle
+    name: Phase 2B supervised autonomous cycle
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
+        # actions/checkout v4; pin to a reviewed SHA in a follow-up lockfile refresh if GitHub rotates this action.
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
+        # actions/setup-node v4; Node itself is pinned to the major used by the repository checks.
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Validate autonomous scripts
+      - name: Context
         run: |
           node --check scripts/autonomous-agent-context.js
           node --check scripts/agent-gatekeeper.js
           node --check scripts/agent-runtime-adapter.js
           node --check scripts/agent-cycle.js
-
-      - name: Validate agent JSON state and schemas
-        run: |
           node -e "for (const f of ['.agent/DAILY_DECISIONS.json','.agent/schemas/decision.schema.json','.agent/schemas/runtime-result.schema.json','.agent/runtime/config.json']) { JSON.parse(require('fs').readFileSync(f, 'utf8')); console.log(f + ' is valid JSON'); }"
+          node scripts/autonomous-agent-context.js
+          node scripts/agent-gatekeeper.js record-base
 
-      - name: Generate autonomous agent context
-        run: node scripts/autonomous-agent-context.js
+      - name: Runtime activation guard
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "AGENT_RUNTIME_MODE=disabled" >> "$GITHUB_ENV"
+            echo "Scheduled coding remains disabled during Phase 2B."
+          else
+            echo "AGENT_RUNTIME_MODE=${{ vars.AGENT_RUNTIME_MODE }}" >> "$GITHUB_ENV"
+          fi
+          echo "AGENT_LLM_MODEL=${{ vars.AGENT_LLM_MODEL }}" >> "$GITHUB_ENV"
 
-      - name: Run deterministic input gate
+      - name: Install pinned OpenHands runtime when explicitly activated
+        if: env.AGENT_RUNTIME_MODE == 'openhands'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install openhands==1.16.0
+          openhands --version
+          openhands --help | head -80
+
+      - name: Input Gate
         run: node scripts/agent-gatekeeper.js input
 
-      - name: Execute one gated agent cycle
-        run: node scripts/agent-cycle.js
+      - name: Decision Runtime
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: node scripts/agent-runtime-adapter.js decision
 
-      - name: Report disabled runtime status
+      - name: Decision Gate
+        if: env.AGENT_RUNTIME_MODE == 'openhands'
+        run: node scripts/agent-gatekeeper.js decision .agent/runtime/current-decision.json
+
+      - name: Implementation Runtime
+        if: env.AGENT_RUNTIME_MODE == 'openhands'
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: node scripts/agent-runtime-adapter.js implementation
+
+      - name: Diff Gate
+        if: env.AGENT_RUNTIME_MODE == 'openhands'
+        run: node scripts/agent-gatekeeper.js diff .agent/runtime/current-decision.json
+
+      - name: Independent Validation
+        if: env.AGENT_RUNTIME_MODE == 'openhands'
+        run: |
+          node -e "const d=JSON.parse(require('fs').readFileSync('.agent/runtime/current-decision.json','utf8')); require('fs').writeFileSync('.agent/runtime/planned-validation.json', JSON.stringify((d.planned_validation||[]).map(v => typeof v === 'string' ? v : v.command), null, 2));"
+          node scripts/agent-gatekeeper.js run-validation .agent/runtime/planned-validation.json
+
+      - name: Result Gate
+        if: env.AGENT_RUNTIME_MODE == 'openhands'
+        run: node scripts/agent-gatekeeper.js result .agent/runtime/runtime-result.json
+
+      - name: Branch Commit
+        if: env.AGENT_RUNTIME_MODE == 'openhands'
+        run: |
+          node -e "const r=require('./.agent/runtime/runtime-result.json'); if (r.outcome !== 'success') process.exit(1)" || { echo "Result was not success; skipping branch commit."; exit 0; }
+          BRANCH="agent/$(node -e "const r=require('./.agent/runtime/runtime-result.json'); process.stdout.write(r.cycle_id)")"
+          git switch -c "$BRANCH"
+          git add -A
+          git commit -m "Autonomous evolution $(node -e "const r=require('./.agent/runtime/runtime-result.json'); process.stdout.write(r.cycle_id)")"
+          git push origin "$BRANCH"
+          echo "AGENT_BRANCH=$BRANCH" >> "$GITHUB_ENV"
+
+      - name: PR Creation
+        if: env.AGENT_RUNTIME_MODE == 'openhands'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node - <<'NODE' > .agent/runtime/pr-body.md
+          const fs = require('fs');
+          const r = JSON.parse(fs.readFileSync('.agent/runtime/runtime-result.json','utf8'));
+          const d = JSON.parse(fs.readFileSync('.agent/runtime/current-decision.json','utf8'));
+          console.log(`Cycle ID: ${r.cycle_id}\n\nSelected backlog ID or repository-observed improvement: ${d.selected_backlog_id || d.repository_observed_improvement}\n\nSelected improvement: ${d.selected_improvement}\n\nSelection reason: ${d.selection_reason}\n\nDeclared scope: ${d.declared_scope}\n\nChanged files:\n${(r.changed_files || []).map(f => '- ' + f).join('\n')}\n\nActual validation commands and exit results:\n${(r.validation || []).map(v => `- ${v.command}: ${v.exit_code} (${v.outcome})`).join('\n')}\n\nKnown limitations: ${r.known_limitations}\n\nRecommended next direction: ${r.recommended_next_direction}\n\nRuntime name: ${r.runtime}\n\nRuntime pinned version: ${r.runtime_version || '1.16.0'}\n\nProvider: ${r.model_provider || 'gemini'}\n\nConfigured model identifier: ${r.model || process.env.AGENT_LLM_MODEL}`);
+          NODE
+          if [ -z "$AGENT_BRANCH" ]; then echo "No autonomous branch was created; skipping PR."; exit 0; fi
+          gh pr create --base main --head "$AGENT_BRANCH" --title "Autonomous evolution $(node -e "const r=require('./.agent/runtime/runtime-result.json'); process.stdout.write(r.cycle_id)")" --body-file .agent/runtime/pr-body.md
+
+      - name: Report runtime status
         if: always()
         run: |
           if test -f .agent/runtime/runtime-result.json; then
@@ -50,4 +120,3 @@ jobs:
           else
             echo "No runtime result was produced."
           fi
-          echo "Phase 2A does not pretend implementation occurred when runtime mode is disabled."

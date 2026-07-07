@@ -15,6 +15,6 @@
     }
   ],
   "outcome": "blocked",
-  "known_limitations": "Phase 2A intentionally fails closed until a verified OpenHands unattended invocation and Gemini model configuration are connected.",
-  "recommended_next_direction": "Phase 2B should verify and pin the OpenHands invocation, configure Gemini through secrets/variables, and enable staged decision plus implementation execution."
+  "known_limitations": "Runtime mode remains disabled until a human-supervised OpenHands activation is explicitly configured.",
+  "recommended_next_direction": "Configure GEMINI_API_KEY, AGENT_LLM_MODEL, and AGENT_RUNTIME_MODE=openhands for one manual supervised workflow_dispatch cycle."
 }

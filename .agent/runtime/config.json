@@ -1,6 +1,8 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "runtime_mode": "disabled",
+  "runtime": "openhands",
+  "runtime_version": "1.16.0",
   "provider": "gemini",
   "model": null,
   "diff_thresholds": {

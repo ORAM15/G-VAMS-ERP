@@ -13,6 +13,7 @@ function readConfig() { return JSON.parse(fs.readFileSync(path.join(runtimeDir, 
 function cycleId() { return process.env.AGENT_CYCLE_ID || `AE-${new Date().toISOString().slice(0, 10)}-001`; }
 function writeJson(file, value) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`); }
 function git(args) { return execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim(); }
+function gitPaths(args) { return git(args).split("\n").filter(Boolean); }
 function configValue(config, key, envKey) { return process.env[envKey] || config[key] || null; }
 function disabled(stage, config) {
   writeJson(resultPath, { cycle_id: cycleId(), runtime: "disabled", model_provider: config.provider || null, model: config.model || null, decision_artifact: fs.existsSync(decisionPath) ? ".agent/runtime/current-decision.json" : null, implementation_summary: `Runtime adapter is disabled during ${stage}; no coding-agent execution occurred.`, changed_files: [], validation: [{ command: `node scripts/agent-runtime-adapter.js ${stage}`, exit_code: 0, outcome: "skipped", summary: "No runtime is connected." }], outcome: "blocked", known_limitations: "Runtime mode remains disabled until a human-supervised OpenHands activation is explicitly configured.", recommended_next_direction: "Configure GEMINI_API_KEY, AGENT_LLM_MODEL, and AGENT_RUNTIME_MODE=openhands for one manual supervised workflow_dispatch cycle." });
@@ -49,7 +50,15 @@ function openhands(stage, config) {
   fs.closeSync(out);
   if (result.stderr) process.stderr.write(result.stderr.replace(process.env.GEMINI_API_KEY, "[REDACTED]"));
   if (stage === "decision") {
-    const changed = git(["diff", JSON.parse(fs.readFileSync(path.join(runtimeDir, "base-state.json"), "utf8")).trusted_base_sha, "--name-only"]).split("\n").filter(Boolean).filter((f) => !f.startsWith(".agent/generated/") && f !== ".agent/runtime/current-decision.json");
+    const base = JSON.parse(fs.readFileSync(path.join(runtimeDir, "base-state.json"), "utf8")).trusted_base_sha;
+    const tracked = gitPaths(["diff", base, "--name-only"]);
+    const untracked = gitPaths(["ls-files", "--others", "--exclude-standard"]);
+    const allowedDecisionArtifacts = new Set([
+      ".agent/runtime/current-decision.json",
+      ".agent/runtime/decision-task.txt",
+      ".agent/runtime/decision-openhands.jsonl"
+    ]);
+    const changed = [...new Set([...tracked, ...untracked])].filter((f) => !f.startsWith(".agent/generated/") && !allowedDecisionArtifacts.has(f));
     if (changed.length) throw new Error(`Decision stage modified files before approval: ${changed.join(", ")}`);
   }
   if (result.status !== 0) {

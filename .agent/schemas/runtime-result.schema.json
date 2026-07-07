@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://g-vams.local/agent/runtime-result.schema.json",
+  "title": "G-VAMS Autonomous Agent Runtime Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "cycle_id",
+    "runtime",
+    "model_provider",
+    "model",
+    "decision_artifact",
+    "implementation_summary",
+    "changed_files",
+    "validation",
+    "outcome",
+    "known_limitations",
+    "recommended_next_direction"
+  ],
+  "properties": {
+    "cycle_id": { "type": "string", "minLength": 3 },
+    "runtime": { "type": "string", "minLength": 1 },
+    "model_provider": { "type": ["string", "null"] },
+    "model": { "type": ["string", "null"] },
+    "decision_artifact": { "type": ["string", "null"] },
+    "implementation_summary": { "type": "string" },
+    "changed_files": { "type": "array", "items": { "type": "string" } },
+    "validation": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "exit_code", "outcome"],
+        "properties": {
+          "command": { "type": "string", "minLength": 1 },
+          "exit_code": { "type": "integer" },
+          "outcome": { "type": "string", "enum": ["passed", "failed", "skipped"] },
+          "summary": { "type": "string" }
+        }
+      }
+    },
+    "outcome": { "type": "string", "enum": ["success", "failed", "blocked", "no_safe_improvement"] },
+    "known_limitations": { "type": "string" },
+    "recommended_next_direction": { "type": "string" }
+  }
+}

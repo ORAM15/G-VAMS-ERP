@@ -3,14 +3,14 @@
   "generated_by": "scripts/autonomous-agent-context.js",
   "deterministic_note": "No wall-clock timestamp is included to avoid meaningless diffs.",
   "git": {
-    "current_sha": "9c8b022e769185699be182d8333f3493432a3a56",
+    "current_sha": "20f355db76808bbe80096c1bfd63ca1d3d0caede",
     "current_branch": "work",
     "recent_commit_subjects": [
+      "Merge autonomous evolution agent infrastructure",
+      "Add autonomous evolution agent infrastructure",
       "Update project health report",
       "Merge project health automation",
-      "Add project health automation",
-      "Remove title and overview from README",
-      "Added project README and contributor details"
+      "Add project health automation"
     ]
   },
   "inputs": {
@@ -209,6 +209,8 @@
     }
   ],
   "importantDirectories": [
+    ".agent/runtime",
+    ".agent/schemas",
     ".github/workflows",
     "backend/controllers",
     "backend/middleware",

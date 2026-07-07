@@ -1,0 +1,46 @@
+name: Autonomous Evolution Agent
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "42 3 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  prepare-autonomous-context:
+    name: Prepare autonomous agent context
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Validate context generator syntax
+        run: node --check scripts/autonomous-agent-context.js
+
+      - name: Validate decision history JSON
+        run: node -e "JSON.parse(require('fs').readFileSync('.agent/DAILY_DECISIONS.json', 'utf8')); console.log('DAILY_DECISIONS.json is valid JSON')"
+
+      - name: Generate autonomous agent context
+        run: node scripts/autonomous-agent-context.js
+
+      - name: Verify generated context exists
+        run: |
+          test -s .agent/generated/AGENT_CONTEXT.md
+          test -s .agent/generated/AGENT_CONTEXT.json
+
+      - name: Document future coding-agent runtime connection
+        run: |
+          cat <<'MESSAGE'
+          Version 1 prepares and validates autonomous agent context only.
+          A real unattended implementation cycle still requires a secure coding-agent runtime such as OpenHands, Codex, or another approved agent runner.
+          That runtime must receive scoped credentials/API access through GitHub Actions secrets, create an isolated branch, select exactly one improvement, implement it, validate it, update .agent memory files, and open a pull request.
+          This workflow intentionally does not fake LLM behavior or randomly edit application code.
+          MESSAGE

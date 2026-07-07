@@ -1,0 +1,232 @@
+{
+  "schema_version": 1,
+  "generated_by": "scripts/autonomous-agent-context.js",
+  "deterministic_note": "No wall-clock timestamp is included to avoid meaningless diffs.",
+  "git": {
+    "current_sha": "9c8b022e769185699be182d8333f3493432a3a56",
+    "current_branch": "work",
+    "recent_commit_subjects": [
+      "Update project health report",
+      "Merge project health automation",
+      "Add project health automation",
+      "Remove title and overview from README",
+      "Added project README and contributor details"
+    ]
+  },
+  "inputs": {
+    "projectVision": {
+      "path": ".agent/PROJECT_VISION.md",
+      "present": true,
+      "content": "# G-VAMS Project Vision\n\nG-VAMS means **GNDEC Virtual Academic Mentor System**.\n\nG-VAMS is an academic ERP and LMS-style system intended to evolve into a professional virtual academic mentor for students. The current repository contains a React frontend and a Node.js/Express/MongoDB backend.\n\n## Long-term product direction\n\nAutonomous and human engineering work should prioritize coherent product evolution in this order:\n\n1. Student academic visibility.\n2. Attendance intelligence and early warnings.\n3. Academic performance insights.\n4. Useful timetable and schedule experiences.\n5. Leave workflow clarity.\n6. LMS and learning-resource usefulness.\n7. Personalized academic mentoring.\n8. Reliable authentication and authorization.\n9. Maintainable architecture.\n10. Testing, observability, security, and production readiness.\n\nThe system should strengthen existing product flows before creating unrelated modules. Every change should create clear student, mentor, administrator, reliability, security, or maintainability value.\n"
+    },
+    "autonomousRules": {
+      "path": ".agent/AUTONOMOUS_RULES.md",
+      "present": true,
+      "content": "# Autonomous Engineering Constitution\n\nThese rules govern the G-VAMS Autonomous Evolution Agent. They are mandatory for every autonomous cycle.\n\n## Observation rules\n\n- Inspect the current repository before every decision.\n- Read `.agent/PROJECT_VISION.md` before selecting work.\n- Read `.agent/DEVELOPMENT_MEMORY.md` and `.agent/DAILY_DECISIONS.json` before selecting work.\n- Read `docs/PROJECT_HEALTH.md` when available.\n- Treat the generated Project Health report as an observation input, not as a replacement for repository inspection.\n\n## Selection rules\n\n- Select exactly ONE focused improvement per autonomous cycle.\n- Prefer completing or strengthening existing product flows before creating unrelated modules.\n- Prefer coherent product evolution rather than random feature generation.\n- Never manufacture meaningless changes merely to create commits.\n- Never make empty commits.\n- Never change code solely to affect a GitHub contribution graph.\n- Make the smallest coherent implementation that creates genuine engineering or product value.\n- The recommended next direction from a previous cycle is advice, not a mandatory decision. The next cycle must inspect the new repository state again.\n\n## Security and safety rules\n\n- Never expose, print, commit, or modify secrets or production credentials.\n- Never commit `.env` files.\n- Never weaken authentication or authorization.\n- Never bypass JWT protection for convenience.\n- Never directly modify the production database.\n- Avoid destructive MongoDB migrations.\n- Avoid adding paid services unless explicitly approved by a human.\n- Prefer free and open-source dependencies.\n- Avoid unnecessary dependencies.\n\n## Architecture preservation rules\n\n- Respect the existing architecture and coding conventions.\n- Never delete working modules merely to simplify implementation.\n- Do not remove, replace, or break the existing Project Health workflow, generator, or generated health report.\n- Do not duplicate Project Health functionality; consume `docs/PROJECT_HEALTH.md` as an input.\n\n## Validation rules\n\n- Run all available relevant validation after implementation.\n- Never intentionally disable tests, build checks, linting, or validation.\n- Never silently ignore a failed validation.\n- If validation fails, the cycle must be recorded as failed.\n- Failed work must not be treated as a successful autonomous evolution.\n\n## Branch and pull request rules\n\n- Application changes must go through an isolated branch and pull request.\n- Main is the protected conceptual source of truth.\n- The autonomous agent must never directly push arbitrary application changes to main.\n- The intended lifecycle is: inspect repository → read project health → read persistent agent memory → inspect backlog and previous decisions → choose exactly one focused improvement → create/use an isolated autonomous branch → implement the improvement → run validation → update persistent memory and decision records → create a pull request → allow CI gates to decide whether the PR is safe.\n\n## Memory rules\n\n- Record what the agent observed, why it selected the improvement, what it changed, validation results, known limitations, and the recommended next direction.\n- Do not invent historical cycles.\n- Do not claim success for work that was not implemented and validated.\n"
+    },
+    "developmentMemory": {
+      "path": ".agent/DEVELOPMENT_MEMORY.md",
+      "present": true,
+      "content": "# Development Memory\n\nThis file is persistent long-term engineering memory for the G-VAMS Autonomous Evolution Agent. It must be updated after each real autonomous cycle.\n\n## Entry format\n\nEach cycle entry should use this structure:\n\n- **Cycle identifier:** Stable ID, for example `AE-YYYY-MM-DD-001`.\n- **Date or cycle metadata:** UTC date/time, branch, actor/runtime, and commit range when available.\n- **Repository state observed:** Concrete facts from the repository at the start of the cycle.\n- **Project-health observations:** Notes from `docs/PROJECT_HEALTH.md` when available.\n- **Selected improvement:** Exactly one focused improvement selected for that cycle.\n- **Reason for selection:** Why this item was chosen over alternatives.\n- **Files or areas changed:** Files, directories, or modules changed.\n- **Validation performed:** Commands and checks run.\n- **Validation result:** Pass, fail, or blocked, with details.\n- **Known limitations:** Remaining risk, incomplete work, or environment limits.\n- **Recommended next direction:** Advisory next step for future cycles.\n\n## Initial repository observation - infrastructure bootstrap\n\n- **Cycle identifier:** `INITIAL-OBSERVATION-2026-07-07`\n- **Date or cycle metadata:** 2026-07-07, manual Phase 1 infrastructure setup observation.\n- **Repository state observed:** The repository contains a React frontend under `frontend/`, a Node.js/Express/MongoDB backend under `backend/`, a generated Project Health report at `docs/PROJECT_HEALTH.md`, a Project Health generator at `scripts/generate-project-health.js`, and a GitHub Actions workflow at `.github/workflows/project-health.yml`.\n- **Project-health observations:** `docs/PROJECT_HEALTH.md` reports a passing frontend production build, two package inventories (`frontend` and `backend`), six mounted backend API groups, eleven backend routes, ten protected routes, and one public login route.\n- **Selected improvement:** None. This entry records the verified baseline used to create the autonomous infrastructure; it is not an autonomous implementation cycle.\n- **Reason for selection:** Not applicable.\n- **Files or areas changed:** Not applicable for historical memory; infrastructure files are introduced by the current Phase 1 task.\n- **Validation performed:** Not applicable to a completed autonomous cycle.\n- **Validation result:** Not applicable.\n- **Known limitations:** No connected unattended AI coding runtime exists in the repository yet. Backend tests are not implemented; the backend package `test` script exits with an error placeholder.\n- **Recommended next direction:** Connect a real coding-agent runtime that can consume `.agent/generated/AGENT_CONTEXT.md`, create an isolated branch, implement one selected backlog item, run validation, update memory, and open a pull request.\n"
+    },
+    "backlog": {
+      "path": ".agent/BACKLOG.md",
+      "present": true,
+      "content": "# Autonomous Engineering Backlog\n\nBacklog items are based on the current repository state and should be re-evaluated every cycle. Status values: `open`, `in-progress`, `blocked`, `done`, `rejected`.\n\n## Items\n\n### AE-BL-001\n\n- **Priority:** HIGH\n- **Area:** Backend validation and reliability\n- **Observed evidence:** `backend/package.json` contains a placeholder `test` script that exits with `Error: no test specified`. Backend API routes exist for auth, attendance, leave, performance, timetable, and LMS.\n- **Suggested improvement:** Add a minimal backend test foundation for route/controller behavior or authentication middleware without requiring a production MongoDB connection.\n- **Expected value:** Creates a validation base for future autonomous backend changes and reduces regression risk.\n- **Dependencies or blockers:** Requires choosing a lightweight test approach compatible with the existing CommonJS backend and Express 5 setup.\n- **Status:** open\n\n### AE-BL-002\n\n- **Priority:** HIGH\n- **Area:** Authentication observability and frontend security hygiene\n- **Observed evidence:** `frontend/src/App.js` logs stored token and auth state using `console.debug` during session validation.\n- **Suggested improvement:** Remove sensitive token logging while preserving useful non-secret diagnostics.\n- **Expected value:** Reduces the risk of credential exposure in browser logs without changing application behavior.\n- **Dependencies or blockers:** Must preserve current login, validation, and protected-route behavior.\n- **Status:** open\n\n### AE-BL-003\n\n- **Priority:** HIGH\n- **Area:** Attendance intelligence\n- **Observed evidence:** The backend exposes protected attendance routes including `/api/attendance/stats` and `/api/attendance/subjects`; the product vision prioritizes attendance intelligence and early warnings.\n- **Suggested improvement:** Strengthen attendance warning data or frontend presentation around low-attendance subjects using existing attendance flows.\n- **Expected value:** Improves student academic visibility and early intervention value.\n- **Dependencies or blockers:** Must inspect current controller data shape and frontend attendance page before implementation.\n- **Status:** open\n\n### AE-BL-004\n\n- **Priority:** MEDIUM\n- **Area:** Leave workflow clarity\n- **Observed evidence:** The backend provides protected `GET /api/leave` and `POST /api/leave` routes and the frontend contains `frontend/src/pages/Leave.js`.\n- **Suggested improvement:** Improve validation, status messaging, or UX clarity for leave submission and history using the existing flow.\n- **Expected value:** Makes student leave requests more understandable and auditable.\n- **Dependencies or blockers:** Must preserve existing API contract or update frontend/backend together.\n- **Status:** open\n\n### AE-BL-005\n\n- **Priority:** MEDIUM\n- **Area:** LMS usefulness\n- **Observed evidence:** The backend exposes protected LMS index and resource routes and the frontend contains an LMS page.\n- **Suggested improvement:** Improve resource metadata, empty states, or navigation around existing LMS materials.\n- **Expected value:** Makes learning resources easier for students to discover and use.\n- **Dependencies or blockers:** Requires verifying current static/seeded LMS data shape.\n- **Status:** open\n\n### AE-BL-006\n\n- **Priority:** MEDIUM\n- **Area:** Project automation\n- **Observed evidence:** Project Health exists and reports frontend build health, package inventory, and backend route structure.\n- **Suggested improvement:** Add focused validation around the autonomous agent state files and generated context without duplicating Project Health.\n- **Expected value:** Keeps autonomous memory, backlog, and decision history machine-readable and trustworthy.\n- **Dependencies or blockers:** Version 1 autonomous workflow provides initial checks; future improvements should avoid overlapping with `scripts/generate-project-health.js`.\n- **Status:** open\n\n### AE-BL-007\n\n- **Priority:** LOW\n- **Area:** Production readiness\n- **Observed evidence:** `backend/server.js` connects to `process.env.MONGO_URI` and listens on port `5000` directly.\n- **Suggested improvement:** Improve server configurability and testability by isolating app creation from process startup.\n- **Expected value:** Enables cleaner backend testing and deployment configuration.\n- **Dependencies or blockers:** Must avoid changing runtime behavior unexpectedly.\n- **Status:** open\n"
+    },
+    "projectHealth": {
+      "path": "docs/PROJECT_HEALTH.md",
+      "present": true,
+      "content": "# Project Health\n\nThis file is generated by `scripts/generate-project-health.js`. It intentionally omits timestamps so the automated workflow only commits when project-health state changes.\n\n## Frontend production build\n\n| Check | Result |\n| --- | --- |\n| Package | `frontend` |\n| Build command | `(cd frontend && npm run build)` |\n| Dependency install | ✅ Passed |\n| Production build | ✅ Passed |\n| Output directory | `frontend/build` |\n| Output files | 13 |\n| Output size | 2.5 MiB |\n\n## Package inventory\n\n| Package | Version | Runtime dependencies | Development dependencies |\n| --- | ---: | ---: | ---: |\n| frontend | 0.1.0 | 9 | 3 |\n| backend | 1.0.0 | 7 | 1 |\n\n## Backend API route structure\n\nRoutes are discovered from `backend/server.js` Express mounts and `backend/routes/*.js` router declarations.\n\n| Method | Route | Auth | Source | Handlers |\n| --- | --- | --- | --- | --- |\n| GET | `/api/attendance` | protected | `backend/routes/attendanceRoutes.js` | `protect`, `getAttendance` |\n| GET | `/api/attendance/stats` | protected | `backend/routes/attendanceRoutes.js` | `protect`, `getAttendanceStats` |\n| GET | `/api/attendance/subjects` | protected | `backend/routes/attendanceRoutes.js` | `protect`, `getAttendanceSubjects` |\n| POST | `/api/auth/login` | public | `backend/routes/authRoutes.js` | `login` |\n| GET | `/api/auth/validate` | protected | `backend/routes/authRoutes.js` | `protect`, `validateSession` |\n| GET | `/api/leave` | protected | `backend/routes/leaveRoutes.js` | `protect`, `getLeaves` |\n| POST | `/api/leave` | protected | `backend/routes/leaveRoutes.js` | `protect`, `createLeave` |\n| GET | `/api/lms` | protected | `backend/routes/lmsRoutes.js` | `protect`, `getLmsIndex` |\n| GET | `/api/lms/:resource` | protected | `backend/routes/lmsRoutes.js` | `protect`, `getLmsResource` |\n| GET | `/api/performance` | protected | `backend/routes/performanceRoutes.js` | `protect`, `getPerformance` |\n| GET | `/api/timetable` | protected | `backend/routes/timetableRoutes.js` | `protect`, `getTimetable` |\n\n## Backend route summary\n\n| Metric | Count |\n| --- | ---: |\n| Mounted API groups | 6 |\n| Total routes | 11 |\n| Protected routes | 10 |\n| Public routes | 1 |\n\n## Automation behavior\n\nThe GitHub Actions workflow runs this same health generator, verifies the frontend production build with the repository's package scripts, refreshes this report, and commits the report back with the repository GitHub Actions token only when `docs/PROJECT_HEALTH.md` changes.\n"
+    }
+  },
+  "dailyDecisions": {
+    "schema_version": 1,
+    "cycles": [],
+    "initialization": {
+      "timestamp": "2026-07-07T00:00:00Z",
+      "note": "Initialized for Phase 1 infrastructure only. No autonomous implementation cycle has occurred yet.",
+      "repository_observations": [
+        "React frontend is present under frontend/.",
+        "Node.js/Express/MongoDB backend is present under backend/.",
+        "Project Health automation is present at .github/workflows/project-health.yml and scripts/generate-project-health.js.",
+        "Generated Project Health report is present at docs/PROJECT_HEALTH.md."
+      ],
+      "health_observations": [
+        "Project Health reports a passing frontend production build.",
+        "Project Health reports 6 mounted API groups, 11 total backend routes, 10 protected routes, and 1 public route."
+      ],
+      "candidate_improvements": [],
+      "selected_improvement": null,
+      "selection_reason": "No autonomous cycle has run. This file only establishes persistent decision history storage.",
+      "implementation_summary": "Phase 1 infrastructure files are being created manually; no application behavior change is claimed as an autonomous cycle.",
+      "validation": [],
+      "outcome": "initialized",
+      "recommended_next_direction": "Connect a real coding-agent runtime that can consume generated context, choose one backlog item, implement it on an isolated branch, validate it, update memory, and open a pull request."
+    }
+  },
+  "packages": {
+    "frontend": {
+      "path": "frontend/package.json",
+      "name": "frontend",
+      "version": "0.1.0",
+      "private": true,
+      "scripts": [
+        "build",
+        "clean",
+        "eject",
+        "prebuild",
+        "start",
+        "test"
+      ],
+      "dependencies": [
+        "@testing-library/dom",
+        "@testing-library/jest-dom",
+        "@testing-library/react",
+        "@testing-library/user-event",
+        "react",
+        "react-dom",
+        "react-router-dom",
+        "react-scripts",
+        "web-vitals"
+      ],
+      "devDependencies": [
+        "autoprefixer",
+        "postcss",
+        "tailwindcss"
+      ]
+    },
+    "backend": {
+      "path": "backend/package.json",
+      "name": "backend",
+      "version": "1.0.0",
+      "private": false,
+      "scripts": [
+        "dev",
+        "seed",
+        "start",
+        "test"
+      ],
+      "dependencies": [
+        "bcryptjs",
+        "cors",
+        "dotenv",
+        "express",
+        "jsonwebtoken",
+        "mongodb",
+        "mongoose"
+      ],
+      "devDependencies": [
+        "nodemon"
+      ]
+    }
+  },
+  "backendApiStructure": [
+    {
+      "file": "backend/routes/attendanceRoutes.js",
+      "routes": [
+        {
+          "method": "GET",
+          "path": "/stats",
+          "handlers": "protect, getAttendanceStats"
+        },
+        {
+          "method": "GET",
+          "path": "/subjects",
+          "handlers": "protect, getAttendanceSubjects"
+        },
+        {
+          "method": "GET",
+          "path": "/",
+          "handlers": "protect, getAttendance"
+        }
+      ]
+    },
+    {
+      "file": "backend/routes/authRoutes.js",
+      "routes": [
+        {
+          "method": "POST",
+          "path": "/login",
+          "handlers": "login"
+        },
+        {
+          "method": "GET",
+          "path": "/validate",
+          "handlers": "protect, validateSession"
+        }
+      ]
+    },
+    {
+      "file": "backend/routes/leaveRoutes.js",
+      "routes": [
+        {
+          "method": "GET",
+          "path": "/",
+          "handlers": "protect, getLeaves"
+        },
+        {
+          "method": "POST",
+          "path": "/",
+          "handlers": "protect, createLeave"
+        }
+      ]
+    },
+    {
+      "file": "backend/routes/lmsRoutes.js",
+      "routes": [
+        {
+          "method": "GET",
+          "path": "/",
+          "handlers": "protect, getLmsIndex"
+        },
+        {
+          "method": "GET",
+          "path": "/:resource",
+          "handlers": "protect, getLmsResource"
+        }
+      ]
+    },
+    {
+      "file": "backend/routes/performanceRoutes.js",
+      "routes": [
+        {
+          "method": "GET",
+          "path": "/",
+          "handlers": "protect, getPerformance"
+        }
+      ]
+    },
+    {
+      "file": "backend/routes/timetableRoutes.js",
+      "routes": [
+        {
+          "method": "GET",
+          "path": "/",
+          "handlers": "protect, getTimetable"
+        }
+      ]
+    }
+  ],
+  "importantDirectories": [
+    ".github/workflows",
+    "backend/controllers",
+    "backend/middleware",
+    "backend/models",
+    "backend/routes",
+    "backend/utils",
+    "frontend/src/assets",
+    "frontend/src/components",
+    "frontend/src/pages",
+    "frontend/src/utils"
+  ],
+  "excludedSecretPatterns": [
+    ".env",
+    ".env.*",
+    "Git credentials",
+    "tokens",
+    "private keys",
+    "node_modules",
+    "build outputs"
+  ]
+}

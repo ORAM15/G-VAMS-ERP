@@ -54,6 +54,7 @@ function openhands(stage, config) {
     const tracked = gitPaths(["diff", base, "--name-only"]);
     const untracked = gitPaths(["ls-files", "--others", "--exclude-standard"]);
     const allowedDecisionArtifacts = new Set([
+      ".agent/runtime/base-state.json",
       ".agent/runtime/current-decision.json",
       ".agent/runtime/decision-task.txt",
       ".agent/runtime/decision-openhands.jsonl"

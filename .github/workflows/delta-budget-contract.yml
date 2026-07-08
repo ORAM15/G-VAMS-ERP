@@ -1,0 +1,16 @@
+name: Delta Budget Contract
+on:
+  pull_request:
+    paths:
+      - 'scripts/agent-runtime-adapter.js'
+      - 'scripts/agent-runtime-adapter.delta-budget.test.js'
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node --check scripts/agent-runtime-adapter.js
+      - run: node scripts/agent-runtime-adapter.delta-budget.test.js

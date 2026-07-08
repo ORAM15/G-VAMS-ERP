@@ -22,10 +22,13 @@ function disabled(stage, config) {
 function writeTask(stage) {
   const template = fs.readFileSync(path.join(runtimeDir, "agent-task-template.md"), "utf8");
   const base = JSON.parse(fs.readFileSync(path.join(runtimeDir, "base-state.json"), "utf8"));
+  const config = readConfig();
+  const maxLines = Number(process.env.AGENT_MAX_LINE_CHANGES || config.diff_thresholds?.max_line_changes || 500);
   const prefix = `${template}\n\nCycle: ${cycleId()}\nTrusted base SHA: ${base.trusted_base_sha}\n`;
   if (stage === "implementation") {
     const decision = fs.readFileSync(decisionPath, "utf8");
-    fs.writeFileSync(taskPath(stage), `${prefix}\nIMPLEMENTATION STAGE\nApproved decision artifact:\n${decision}\nImplement only this approved improvement. Modify only allowed_paths. Do not modify protected control-plane files or workflows. Do not stage files. Do not commit. Run relevant validation only if safe. Write .agent/runtime/runtime-result.json using .agent/schemas/runtime-result.schema.json, then stop.\n`);
+    const deltaBudget = `\nHARD DELTA BUDGET\nThe deterministic Diff Gate permits at most ${maxLines} total added plus deleted lines from the trusted base. Treat this as a hard safety ceiling, not a target. Implement the smallest viable patch and preserve existing formatting. Do not rewrite whole files, reformat unrelated code, regenerate assets, or modify lockfiles/generated files unless the approved decision explicitly requires them. Before reporting success, inspect git diff --numstat and keep the total safely below ${maxLines}. If the approved improvement cannot be completed within this budget, do not force a broad patch: write runtime-result.json with outcome=blocked, explain the limitation, and stop.\n`;
+    fs.writeFileSync(taskPath(stage), `${prefix}${deltaBudget}\nIMPLEMENTATION STAGE\nApproved decision artifact:\n${decision}\nImplement only this approved improvement. Modify only allowed_paths. Do not modify protected control-plane files or workflows. Do not stage files. Do not commit. Run relevant validation only if safe. Write .agent/runtime/runtime-result.json using .agent/schemas/runtime-result.schema.json, then stop.\n`);
   }
 }
 function requireGemini(config) {

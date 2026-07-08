@@ -43,8 +43,8 @@ function validateLineage() {
   const state = loadBaseState(); if (!state) return ["missing .agent/runtime/base-state.json; base SHA was not recorded"];
   const errors = [];
   try { git(["merge-base", "--is-ancestor", state.trusted_base_sha, "HEAD"]); } catch { errors.push("HEAD is not descended from trusted base SHA; history rewrite or branch lineage violation suspected"); }
-  const parents = git(["rev-list", "--parents", "-n", "1", "HEAD"]).split(/\s+/).slice(1);
-  if (parents.length > 1) errors.push("merge commits are not allowed in autonomous runtime delta");
+  const mergeCommits = git(["rev-list", "--min-parents=2", `${state.trusted_base_sha}..HEAD`]).split("\n").filter(Boolean);
+  if (mergeCommits.length > 0) errors.push("merge commits are not allowed in autonomous runtime delta");
   return errors;
 }
 function validateValidationCommand(command) {

@@ -44,6 +44,7 @@ jobs:
             echo "AGENT_RUNTIME_MODE=${{ vars.AGENT_RUNTIME_MODE }}" >> "$GITHUB_ENV"
           fi
           echo "AGENT_LLM_MODEL=${{ vars.AGENT_LLM_MODEL }}" >> "$GITHUB_ENV"
+          echo "AGENT_IMPLEMENTATION_MODEL=${{ vars.AGENT_IMPLEMENTATION_MODEL }}" >> "$GITHUB_ENV"
 
       - name: Input Gate
         run: node scripts/agent-gatekeeper.js input
@@ -67,7 +68,7 @@ jobs:
       - name: Implementation Runtime
         if: env.AGENT_RUNTIME_MODE == 'openhands'
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: node scripts/agent-runtime-adapter.js implementation
 
       - name: Diff Gate

@@ -76,7 +76,23 @@ jobs:
         run: |
           test -s .agent/runtime/implementation-openhands.jsonl || { echo "OpenHands produced no execution trace."; exit 1; }
           test -s .agent/runtime/runtime-result.json || { echo "OpenHands produced no runtime result."; exit 1; }
-          node -e "const fs=require('fs'); const r=JSON.parse(fs.readFileSync('.agent/runtime/runtime-result.json','utf8')); if (r.outcome !== 'success') throw new Error('Implementation outcome is not success'); if (!Array.isArray(r.changed_files) || r.changed_files.length === 0) throw new Error('Implementation reported no changed files'); console.log('Runtime result reports changed files: ' + r.changed_files.join(', '));"
+          node - <<'NODE'
+          const fs = require('fs');
+          const r = JSON.parse(fs.readFileSync('.agent/runtime/runtime-result.json', 'utf8'));
+          if (r.outcome === 'blocked') {
+            if (Array.isArray(r.changed_files) && r.changed_files.length > 0) throw new Error('Blocked implementation cannot report changed files');
+            console.log('Implementation is blocked by provider capacity; preserving evidence for Result Gate.');
+            process.exit(0);
+          }
+          if (r.outcome !== 'success') throw new Error('Implementation outcome is neither success nor blocked capacity');
+          if (!Array.isArray(r.changed_files) || r.changed_files.length === 0) throw new Error('Implementation reported no changed files');
+          console.log('Runtime result reports changed files: ' + r.changed_files.join(', '));
+          NODE
+          OUTCOME="$(node -e "const r=require('./.agent/runtime/runtime-result.json'); process.stdout.write(r.outcome)")"
+          if [ "$OUTCOME" = "blocked" ]; then
+            echo "Blocked capacity requires no repository delta; continuing to Result Gate."
+            exit 0
+          fi
           CODE_DELTA="$(git diff --name-only -- . ':(exclude).agent/runtime/**')"
           UNTRACKED_DELTA="$(git ls-files --others --exclude-standard | grep -v '^.agent/runtime/' || true)"
           if [ -z "$CODE_DELTA$UNTRACKED_DELTA" ]; then
@@ -86,18 +102,33 @@ jobs:
           echo "Verified implementation repository delta."
 
       - name: Diff Gate
-        if: env.AGENT_RUNTIME_MODE == 'openhands'
-        run: node scripts/agent-gatekeeper.js diff .agent/runtime/current-decision.json
+        if: env.AGENT_RUNTIME_MODE == 'openhands' && hashFiles('.agent/runtime/runtime-result.json') != ''
+        run: |
+          OUTCOME="$(node -e "const r=require('./.agent/runtime/runtime-result.json'); process.stdout.write(r.outcome)")"
+          if [ "$OUTCOME" = "blocked" ]; then echo "Blocked capacity has no diff to validate; skipping Diff Gate."; exit 0; fi
+          node scripts/agent-gatekeeper.js diff .agent/runtime/current-decision.json
 
       - name: Independent Validation
-        if: env.AGENT_RUNTIME_MODE == 'openhands'
+        if: env.AGENT_RUNTIME_MODE == 'openhands' && hashFiles('.agent/runtime/runtime-result.json') != ''
         run: |
+          OUTCOME="$(node -e "const r=require('./.agent/runtime/runtime-result.json'); process.stdout.write(r.outcome)")"
+          if [ "$OUTCOME" = "blocked" ]; then
+            echo '[]' > .agent/runtime/validation-results.json
+            echo "Blocked capacity has no implementation delta to validate."
+            exit 0
+          fi
           node -e "const d=JSON.parse(require('fs').readFileSync('.agent/runtime/current-decision.json','utf8')); require('fs').writeFileSync('.agent/runtime/planned-validation.json', JSON.stringify((d.planned_validation||[]).map(v => typeof v === 'string' ? v : v.command), null, 2));"
           node scripts/agent-gatekeeper.js run-validation .agent/runtime/planned-validation.json
 
       - name: Result Gate
-        if: env.AGENT_RUNTIME_MODE == 'openhands'
-        run: node scripts/agent-gatekeeper.js result .agent/runtime/runtime-result.json
+        if: env.AGENT_RUNTIME_MODE == 'openhands' && hashFiles('.agent/runtime/runtime-result.json') != ''
+        run: |
+          OUTCOME="$(node -e "const r=require('./.agent/runtime/runtime-result.json'); process.stdout.write(r.outcome)")"
+          if [ "$OUTCOME" = "blocked" ]; then
+            node -e "const fs=require('fs'); const r=require('./.agent/runtime/runtime-result.json'); const evidence=(r.implementation_summary+' '+r.known_limitations+' '+r.recommended_next_direction); if (!/capacity|provider|rate.?limit|exhaust/i.test(evidence)) throw new Error('Blocked result lacks provider-capacity evidence'); if ((r.changed_files||[]).length) throw new Error('Blocked result claims changed files'); console.log('Blocked capacity result accepted without implementation validation.');"
+          else
+            node scripts/agent-gatekeeper.js result .agent/runtime/runtime-result.json
+          fi
 
       - name: Branch Commit
         if: env.AGENT_RUNTIME_MODE == 'openhands'

@@ -85,6 +85,9 @@ async function directGeminiDecision(config) {
 function writeRuntimeFailure(stage, runtimeVersion, model, status, summary, limitation) {
   writeJson(resultPath, { cycle_id: cycleId(), runtime: "openhands", runtime_version: runtimeVersion, model_provider: "openrouter", model, decision_artifact: fs.existsSync(decisionPath) ? ".agent/runtime/current-decision.json" : null, implementation_summary: summary, changed_files: [], validation: [{ command: `openhands --override-with-envs --headless --json -f .agent/runtime/${stage}-task.txt`, exit_code: status || 1, outcome: "failed", summary: limitation }], outcome: "failed", known_limitations: limitation, recommended_next_direction: "Inspect the runtime JSONL artifact and correct the provider or agent output contract before rerunning the supervised cycle." });
 }
+function writeProviderCapacityBlock(stage, runtimeVersion, model, limitation) {
+  writeJson(resultPath, { cycle_id: cycleId(), runtime: "openhands", runtime_version: runtimeVersion, model_provider: "openrouter", model, decision_artifact: fs.existsSync(decisionPath) ? ".agent/runtime/current-decision.json" : null, implementation_summary: "Implementation was not completed because the configured provider had no trustworthy execution capacity.", changed_files: [], validation: [{ command: `openhands --override-with-envs --headless --json -f .agent/runtime/${stage}-task.txt`, exit_code: 1, outcome: "failed", summary: limitation }], outcome: "blocked", known_limitations: limitation, recommended_next_direction: "Restore OpenRouter implementation capacity or configure an approved implementation provider, then start a fresh supervised cycle from the trusted base." });
+}
 function classifyOpenHandsEvidence(stage) {
   const artifact = outputPath(stage);
   if (!fs.existsSync(artifact)) return null;
@@ -107,7 +110,7 @@ function openhandsImplementation(config) {
   if (result.stderr) process.stderr.write(result.stderr.replace(process.env.OPENROUTER_API_KEY, "[REDACTED]"));
   if (result.status !== 0) { writeRuntimeFailure(stage, runtimeVersion, model, result.status, "OpenHands implementation stage exited non-zero.", "OpenHands process failed; stderr was not committed."); process.exit(1); }
   const evidenceFailure = classifyOpenHandsEvidence(stage);
-  if (evidenceFailure) { writeRuntimeFailure(stage, runtimeVersion, model, 1, "OpenHands process exited zero but provider failure evidence was detected.", evidenceFailure); console.error(`ERROR: ${evidenceFailure}`); process.exit(1); }
+  if (evidenceFailure) { writeProviderCapacityBlock(stage, runtimeVersion, model, evidenceFailure); console.error(`BLOCKED: ${evidenceFailure}`); process.exit(1); }
   console.log(`OpenHands implementation stage completed with pinned version ${runtimeVersion} using OpenRouter model ${model}.`);
 }
 async function main() {

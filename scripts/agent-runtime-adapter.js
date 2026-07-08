@@ -83,7 +83,16 @@ async function directGeminiDecision(config) {
   console.log(`Direct Gemini decision stage completed with model ${model}; decision artifact validated.`);
 }
 function writeRuntimeFailure(stage, runtimeVersion, model, status, summary, limitation) {
-  writeJson(resultPath, { cycle_id: cycleId(), runtime: "openhands", runtime_version: runtimeVersion, model_provider: "openrouter", model, decision_artifact: fs.existsSync(decisionPath) ? ".agent/runtime/current-decision.json" : null, implementation_summary: summary, changed_files: [], validation: [{ command: `openhands --override-with-envs --headless --json -f .agent/runtime/${stage}-task.txt`, exit_code: status || 1, outcome: "failed", summary: limitation }], outcome: "failed", known_limitations: limitation, recommended_next_direction: "Inspect the runtime JSONL artifact and correct the agent output contract before rerunning the supervised cycle." });
+  writeJson(resultPath, { cycle_id: cycleId(), runtime: "openhands", runtime_version: runtimeVersion, model_provider: "openrouter", model, decision_artifact: fs.existsSync(decisionPath) ? ".agent/runtime/current-decision.json" : null, implementation_summary: summary, changed_files: [], validation: [{ command: `openhands --override-with-envs --headless --json -f .agent/runtime/${stage}-task.txt`, exit_code: status || 1, outcome: "failed", summary: limitation }], outcome: "failed", known_limitations: limitation, recommended_next_direction: "Inspect the runtime JSONL artifact and correct the provider or agent output contract before rerunning the supervised cycle." });
+}
+function classifyOpenHandsEvidence(stage) {
+  const artifact = outputPath(stage);
+  if (!fs.existsSync(artifact)) return null;
+  const evidence = fs.readFileSync(artifact, "utf8");
+  if (/free-models-per-day|X-RateLimit-Remaining[^\n]*\\?"0\\?"|RateLimitError|OpenrouterException[\s\S]*code\\?"?:\\?"?429/i.test(evidence)) {
+    return "OpenRouter implementation capacity was exhausted or rate-limited (HTTP 429); OpenHands did not produce trustworthy successful implementation evidence.";
+  }
+  return null;
 }
 function openhandsImplementation(config) {
   const stage = "implementation";
@@ -97,6 +106,8 @@ function openhandsImplementation(config) {
   fs.closeSync(out);
   if (result.stderr) process.stderr.write(result.stderr.replace(process.env.OPENROUTER_API_KEY, "[REDACTED]"));
   if (result.status !== 0) { writeRuntimeFailure(stage, runtimeVersion, model, result.status, "OpenHands implementation stage exited non-zero.", "OpenHands process failed; stderr was not committed."); process.exit(1); }
+  const evidenceFailure = classifyOpenHandsEvidence(stage);
+  if (evidenceFailure) { writeRuntimeFailure(stage, runtimeVersion, model, 1, "OpenHands process exited zero but provider failure evidence was detected.", evidenceFailure); console.error(`ERROR: ${evidenceFailure}`); process.exit(1); }
   console.log(`OpenHands implementation stage completed with pinned version ${runtimeVersion} using OpenRouter model ${model}.`);
 }
 async function main() {

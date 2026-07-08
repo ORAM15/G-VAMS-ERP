@@ -105,7 +105,7 @@ function normalizeResult(file) {
   const observed = readJson(validationFile);
   if (!Array.isArray(observed) || observed.length === 0) throw new Error("deterministic validation results are empty; refusing to normalize runtime result");
   r.validation = observed;
-  if (observed.some((v) => v.outcome !== "passed" || Number(v.exit_code) !== 0)) r.outcome = "failed";
+  if (observed.some((v) => v.outcome !== "passed" || Number(v.exit_code) !== 0) && r.outcome === "success") r.outcome = "failed";
   writeJson(resultFile, r);
   return r;
 }
@@ -115,6 +115,8 @@ function validateResult(file) {
   if (!["success","failed","blocked","no_safe_improvement"].includes(r.outcome)) errors.push("result outcome is outside strict enum");
   if ((r.validation || []).some((v) => v.outcome === "failed" || Number(v.exit_code) !== 0) && r.outcome === "success") errors.push("failed validation cannot be represented as success");
   if (r.outcome === "success" && (!Array.isArray(r.changed_files) || r.changed_files.length === 0)) errors.push("success result cannot have an empty changed_files list");
+  if (r.outcome === "blocked" && Array.isArray(r.changed_files) && r.changed_files.length > 0) errors.push("blocked result cannot claim changed files");
+  if (r.outcome === "blocked" && !/capacity|provider|rate.?limit|exhaust/i.test(`${r.implementation_summary} ${r.known_limitations} ${r.recommended_next_direction}`)) errors.push("blocked result must carry explicit provider-capacity evidence");
   if (errors.length) fail(errors); ok(`Result gate passed for ${r.cycle_id} with outcome=${r.outcome}; validation normalized from deterministic observations.`);
 }
 const [stage, file] = process.argv.slice(2);

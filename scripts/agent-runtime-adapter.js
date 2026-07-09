@@ -38,17 +38,23 @@ function requireGemini(config) {
   if (!/^gemini\/[A-Za-z0-9._-]+$/.test(model)) throw new Error("AGENT_LLM_MODEL must use gemini/<model-name>");
   return model;
 }
-function requireOpenHandsConfig(config) {
-  const runtimeVersion = configValue(config, "runtime_version", "AGENT_RUNTIME_VERSION");
-  const model = process.env.AGENT_IMPLEMENTATION_MODEL || null;
-  if (!runtimeVersion) throw new Error("runtime_mode=openhands requires pinned runtime_version");
-  if (!model) throw new Error("AGENT_IMPLEMENTATION_MODEL is required for the OpenHands implementation stage");
+function implementationCandidate(model) {
   const match = model.match(/^(openrouter|gemini)\/[A-Za-z0-9._\/-]+$/);
-  if (!match) throw new Error("AGENT_IMPLEMENTATION_MODEL must use an approved openrouter/<model-name> or gemini/<model-name> identifier");
+  if (!match) throw new Error(`Implementation model must use an approved openrouter/<model-name> or gemini/<model-name> identifier: ${model}`);
   const provider = match[1];
   const apiKey = provider === "openrouter" ? process.env.OPENROUTER_API_KEY : process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error(`${provider === "openrouter" ? "OPENROUTER_API_KEY" : "GEMINI_API_KEY"} secret is required for the ${provider} OpenHands implementation stage`);
-  return { runtimeVersion, model, provider, apiKey };
+  if (!apiKey) return null;
+  return { model, provider, apiKey };
+}
+function requireOpenHandsConfig(config) {
+  const runtimeVersion = configValue(config, "runtime_version", "AGENT_RUNTIME_VERSION");
+  const configured = process.env.AGENT_IMPLEMENTATION_MODELS || process.env.AGENT_IMPLEMENTATION_MODEL || null;
+  if (!runtimeVersion) throw new Error("runtime_mode=openhands requires pinned runtime_version");
+  if (!configured) throw new Error("AGENT_IMPLEMENTATION_MODELS or AGENT_IMPLEMENTATION_MODEL is required for the OpenHands implementation stage");
+  const models = configured.split(",").map((model) => model.trim()).filter(Boolean);
+  const candidates = models.map(implementationCandidate).filter(Boolean);
+  if (!candidates.length) throw new Error("No approved implementation candidate has its required provider secret configured");
+  return { runtimeVersion, candidates };
 }
 function validateDecisionArtifact() {
   if (!fs.existsSync(decisionPath)) throw new Error("Decision runtime did not create required .agent/runtime/current-decision.json");
@@ -88,33 +94,46 @@ async function directGeminiDecision(config) {
 function writeRuntimeFailure(stage, runtimeVersion, model, provider, status, summary, limitation) {
   writeJson(resultPath, { cycle_id: cycleId(), runtime: "openhands", runtime_version: runtimeVersion, model_provider: provider, model, decision_artifact: fs.existsSync(decisionPath) ? ".agent/runtime/current-decision.json" : null, implementation_summary: summary, changed_files: [], validation: [{ command: `openhands --override-with-envs --headless --json -f .agent/runtime/${stage}-task.txt`, exit_code: status || 1, outcome: "failed", summary: limitation }], outcome: "failed", known_limitations: limitation, recommended_next_direction: "Inspect the runtime JSONL artifact and correct the provider or agent output contract before rerunning the supervised cycle." });
 }
-function writeProviderCapacityBlock(stage, runtimeVersion, model, provider, limitation) {
-  writeJson(resultPath, { cycle_id: cycleId(), runtime: "openhands", runtime_version: runtimeVersion, model_provider: provider, model, decision_artifact: fs.existsSync(decisionPath) ? ".agent/runtime/current-decision.json" : null, implementation_summary: "Implementation was not completed because the configured provider had no trustworthy execution capacity.", changed_files: [], validation: [{ command: `openhands --override-with-envs --headless --json -f .agent/runtime/${stage}-task.txt`, exit_code: 1, outcome: "failed", summary: limitation }], outcome: "blocked", known_limitations: limitation, recommended_next_direction: "Restore implementation-provider capacity or configure another approved implementation provider, then start a fresh supervised cycle from the trusted base." });
+function writeProviderCapacityBlock(stage, runtimeVersion, attempts) {
+  const last = attempts[attempts.length - 1];
+  const limitation = attempts.map((attempt) => `${attempt.model}: ${attempt.limitation}`).join(" | ");
+  writeJson(resultPath, { cycle_id: cycleId(), runtime: "openhands", runtime_version: runtimeVersion, model_provider: last.provider, model: last.model, decision_artifact: fs.existsSync(decisionPath) ? ".agent/runtime/current-decision.json" : null, implementation_summary: "Implementation was not completed because every configured implementation provider candidate had no trustworthy execution capacity.", changed_files: [], validation: [{ command: `openhands --override-with-envs --headless --json -f .agent/runtime/${stage}-task.txt`, exit_code: 1, outcome: "failed", summary: limitation }], outcome: "blocked", known_limitations: limitation, recommended_next_direction: "Restore capacity for at least one approved implementation candidate or configure another approved candidate, then start a fresh supervised cycle from the trusted base." });
 }
 function classifyOpenHandsEvidence(stage, provider) {
   const artifact = outputPath(stage);
   if (!fs.existsSync(artifact)) return null;
   const evidence = fs.readFileSync(artifact, "utf8");
-  if (/free-models-per-day|X-RateLimit-Remaining[^\n]*\\?"0\\?"|RateLimitError|OpenrouterException[\s\S]*code\\?"?:\\?"?429|RESOURCE_EXHAUSTED|quota[^\n]*exceed|rate.?limit[^\n]*429/i.test(evidence)) {
-    return `${provider} implementation capacity was exhausted or rate-limited; OpenHands did not produce trustworthy successful implementation evidence.`;
+  if (/free-models-per-day|X-RateLimit-Remaining[^\n]*\\?"0\\?"|RateLimitError|OpenrouterException[\s\S]*code\\?"?:\\?"?429|RESOURCE_EXHAUSTED|quota[^\n]*exceed|rate.?limit[^\n]*429|currently experiencing high demand|status\\?"?:\\?"?UNAVAILABLE/i.test(evidence)) {
+    return `${provider} implementation capacity was exhausted, unavailable, or rate-limited; OpenHands did not produce trustworthy successful implementation evidence.`;
   }
   return null;
 }
 function openhandsImplementation(config) {
   const stage = "implementation";
-  const { runtimeVersion, model, provider, apiKey } = requireOpenHandsConfig(config);
+  const { runtimeVersion, candidates } = requireOpenHandsConfig(config);
   writeTask(stage);
   const version = spawnSync("openhands", ["--version"], { cwd: root, encoding: "utf8", shell: false });
   if (version.status !== 0 || !(`${version.stdout}${version.stderr}`).includes(runtimeVersion)) throw new Error(`Installed OpenHands version does not match pinned ${runtimeVersion}`);
-  const env = { ...process.env, LLM_MODEL: model, LLM_API_KEY: apiKey };
-  const out = fs.openSync(outputPath(stage), "w");
-  const result = spawnSync("openhands", ["--override-with-envs", "--headless", "--json", "-f", taskPath(stage)], { cwd: root, env, shell: false, stdio: ["ignore", out, "pipe"], encoding: "utf8" });
-  fs.closeSync(out);
-  if (result.stderr) process.stderr.write(result.stderr.replace(apiKey, "[REDACTED]"));
-  if (result.status !== 0) { writeRuntimeFailure(stage, runtimeVersion, model, provider, result.status, "OpenHands implementation stage exited non-zero.", "OpenHands process failed; stderr was not committed."); process.exit(1); }
-  const evidenceFailure = classifyOpenHandsEvidence(stage, provider);
-  if (evidenceFailure) { writeProviderCapacityBlock(stage, runtimeVersion, model, provider, evidenceFailure); console.error(`BLOCKED: ${evidenceFailure}`); return; }
-  console.log(`OpenHands implementation stage completed with pinned version ${runtimeVersion} using ${provider} model ${model}.`);
+  const attempts = [];
+  for (const { model, provider, apiKey } of candidates) {
+    console.log(`Attempting OpenHands implementation with approved candidate ${provider}:${model}.`);
+    const env = { ...process.env, LLM_MODEL: model, LLM_API_KEY: apiKey };
+    const out = fs.openSync(outputPath(stage), "w");
+    const result = spawnSync("openhands", ["--override-with-envs", "--headless", "--json", "-f", taskPath(stage)], { cwd: root, env, shell: false, stdio: ["ignore", out, "pipe"], encoding: "utf8" });
+    fs.closeSync(out);
+    if (result.stderr) process.stderr.write(result.stderr.replaceAll(apiKey, "[REDACTED]"));
+    if (result.status !== 0) { writeRuntimeFailure(stage, runtimeVersion, model, provider, result.status, "OpenHands implementation stage exited non-zero.", "OpenHands process failed; stderr was not committed."); process.exit(1); }
+    const evidenceFailure = classifyOpenHandsEvidence(stage, provider);
+    if (evidenceFailure) {
+      attempts.push({ model, provider, limitation: evidenceFailure });
+      console.error(`CAPACITY FALLBACK: ${evidenceFailure}`);
+      continue;
+    }
+    console.log(`OpenHands implementation stage completed with pinned version ${runtimeVersion} using ${provider} model ${model}.`);
+    return;
+  }
+  writeProviderCapacityBlock(stage, runtimeVersion, attempts);
+  console.error(`BLOCKED: all ${attempts.length} approved implementation candidates were capacity-limited or unavailable.`);
 }
 async function main() {
   const stage = process.argv[2] || "decision";

@@ -110,7 +110,7 @@ function openhandsImplementation(config) {
   if (result.stderr) process.stderr.write(result.stderr.replace(process.env.OPENROUTER_API_KEY, "[REDACTED]"));
   if (result.status !== 0) { writeRuntimeFailure(stage, runtimeVersion, model, result.status, "OpenHands implementation stage exited non-zero.", "OpenHands process failed; stderr was not committed."); process.exit(1); }
   const evidenceFailure = classifyOpenHandsEvidence(stage);
-  if (evidenceFailure) { writeProviderCapacityBlock(stage, runtimeVersion, model, evidenceFailure); console.error(`BLOCKED: ${evidenceFailure}`); process.exit(1); }
+  if (evidenceFailure) { writeProviderCapacityBlock(stage, runtimeVersion, model, evidenceFailure); console.error(`BLOCKED: ${evidenceFailure}`); return; }
   console.log(`OpenHands implementation stage completed with pinned version ${runtimeVersion} using OpenRouter model ${model}.`);
 }
 async function main() {

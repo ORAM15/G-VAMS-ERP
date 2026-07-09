@@ -62,7 +62,7 @@ jobs:
         if: env.AGENT_RUNTIME_MODE == 'openhands'
         run: |
           python -m pip install --upgrade pip
-          python -m pip install openhands==1.16.0
+          python -m pip install "git+https://github.com/OpenHands/OpenHands-CLI.git@2df8a2835d3f1bd2f2eadf5a7a2e1ad0dfb0d271"
           openhands --version
 
       - name: Implementation Runtime

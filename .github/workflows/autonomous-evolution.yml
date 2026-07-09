@@ -44,7 +44,7 @@ jobs:
             echo "AGENT_RUNTIME_MODE=${{ vars.AGENT_RUNTIME_MODE }}" >> "$GITHUB_ENV"
           fi
           echo "AGENT_LLM_MODEL=${{ vars.AGENT_LLM_MODEL }}" >> "$GITHUB_ENV"
-          echo "AGENT_IMPLEMENTATION_MODEL=${{ vars.AGENT_IMPLEMENTATION_MODEL }}" >> "$GITHUB_ENV"
+          echo "AGENT_IMPLEMENTATION_MODEL=gemini/gemini-2.5-flash" >> "$GITHUB_ENV"
 
       - name: Input Gate
         run: node scripts/agent-gatekeeper.js input

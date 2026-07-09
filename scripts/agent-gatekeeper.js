@@ -26,7 +26,8 @@ function ok(message) { console.log(message); }
 function isForbiddenPath(p) { const n = rel(p); return forbiddenPathPatterns.some((r) => r.test(n)); }
 function isProtected(p) { const n = rel(p); return protectedControlPlane.some((entry) => entry.endsWith("/") ? n.startsWith(entry) : n === entry); }
 function isAgentState(p) { const n = rel(p); return agentStatePaths.includes(n); }
-function underAllowed(file, allowed) { const n = rel(file); return allowed.some((a) => { const x = rel(a); return n === x || n.startsWith(x.replace(/\/$/, "") + "/"); }); }
+function isPackageLockCompanion(file, allowed) { const n = rel(file); if (path.posix.basename(n) !== "package-lock.json") return false; const manifest = path.posix.join(path.posix.dirname(n), "package.json"); return allowed.some((a) => rel(a) === manifest); }
+function underAllowed(file, allowed) { const n = rel(file); return allowed.some((a) => { const x = rel(a); return n === x || n.startsWith(x.replace(/\/$/, "") + "/"); }) || isPackageLockCompanion(n, allowed); }
 function git(args) { return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim(); }
 function loadConfig() { try { return readJson(".agent/runtime/config.json"); } catch { return {}; } }
 function loadBaseState() { try { return readJson(".agent/runtime/base-state.json"); } catch { return null; } }

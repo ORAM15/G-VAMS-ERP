@@ -86,7 +86,7 @@ function validateDecision(file) {
   if (!d.selected_backlog_id && !d.repository_observed_improvement) errors.push("decision must declare selected_backlog_id or repository_observed_improvement");
   if (!/^[A-Za-z0-9._:-]{3,}$/.test(d.cycle_id || "")) errors.push("cycle_id must be stable and non-empty");
   if (!["low","medium","high"].includes(d.risk_level)) errors.push("risk_level must be one of low, medium, high");
-  for (const p of [...(d.allowed_paths || []), ...(d.forbidden_paths || [])]) { if (isForbiddenPath(p)) errors.push(`decision references forbidden path: ${p}`); if (isProtected(p)) errors.push(`decision attempts to authorize protected control-plane path: ${p}`); }
+  for (const p of d.allowed_paths || []) { if (isForbiddenPath(p)) errors.push(`decision attempts to authorize forbidden path: ${p}`); if (isProtected(p)) errors.push(`decision attempts to authorize protected control-plane path: ${p}`); }
   for (const v of d.planned_validation || []) { const err = validateValidationCommand(typeof v === "string" ? v : v.command); if (err) errors.push(`planned validation rejected: ${err}`); }
   if (errors.length) fail(errors); ok(`Decision gate passed for ${d.cycle_id}: exactly one declared improvement is scoped.`);
 }

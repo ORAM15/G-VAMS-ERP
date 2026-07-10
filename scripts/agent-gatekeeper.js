@@ -36,7 +36,7 @@ function diffFiles(base = baseSha()) { return git(["diff", base, "--name-only"])
 function normalizeRepoPath(p) { return rel(String(p || "").replace(/\\/g, "/")).replace(/^\/+/, ""); }
 function isRuntimeEvidencePath(p) { return normalizeRepoPath(p).startsWith(".agent/runtime/"); }
 function actualImplementationDelta(base = baseSha()) { return [...new Set([...diffFiles(base), ...untrackedFiles()].map(normalizeRepoPath).filter((f) => f && !isRuntimeEvidencePath(f)))].sort(); }
-function reportedChangedFiles(r) { return [...new Set((Array.isArray(r.changed_files) ? r.changed_files : []).map(normalizeRepoPath).filter((f) => f && !isRuntimeEvidencePath(f)))].sort(); }
+function reportedChangedFiles(r) { return [...new Set((Array.isArray(r.changed_files) ? r.changed_files : []).map(normalizeRepoPath).filter(Boolean))].sort(); }
 function validateRuntimeReportDiff(file) {
   const r = JSON.parse(fs.readFileSync(path.resolve(root, file), "utf8")); const errors = [];
   if (r.outcome === "blocked" || r.outcome === "no_safe_improvement") {

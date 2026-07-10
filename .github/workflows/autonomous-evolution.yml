@@ -118,7 +118,25 @@ jobs:
             echo "Blocked capacity has no implementation delta to validate."
             exit 0
           fi
-          node -e "const d=JSON.parse(require('fs').readFileSync('.agent/runtime/current-decision.json','utf8')); require('fs').writeFileSync('.agent/runtime/planned-validation.json', JSON.stringify((d.planned_validation||[]).map(v => typeof v === 'string' ? v : v.command), null, 2));"
+          node - <<'NODE'
+          const fs = require('fs');
+          const d = JSON.parse(fs.readFileSync('.agent/runtime/current-decision.json', 'utf8'));
+          const planned = (d.planned_validation || []).map(v => typeof v === 'string' ? v : v.command);
+          const normalized = planned.map(command => {
+            const match = command.match(/^npm --prefix (frontend|backend) run (build|test|lint)$/);
+            if (!match) return { command };
+            const [, workspace, script] = match;
+            const pkg = JSON.parse(fs.readFileSync(`${workspace}/package.json`, 'utf8'));
+            if (!pkg.scripts || typeof pkg.scripts[script] !== 'string' || !pkg.scripts[script].trim()) {
+              return { command, skip: true, skip_reason: `${workspace}/package.json does not configure npm script '${script}'` };
+            }
+            return { command };
+          });
+          fs.writeFileSync('.agent/runtime/planned-validation.json', JSON.stringify(normalized, null, 2));
+          for (const item of normalized) {
+            if (item.skip) console.log(`Repository-aware validation: ${item.command} is not configured; recording not_configured.`);
+          }
+          NODE
           node scripts/agent-gatekeeper.js run-validation .agent/runtime/planned-validation.json
 
       - name: Result Gate

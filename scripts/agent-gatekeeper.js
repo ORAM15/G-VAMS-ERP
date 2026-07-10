@@ -33,6 +33,26 @@ function loadConfig() { try { return readJson(".agent/runtime/config.json"); } c
 function loadBaseState() { try { return readJson(".agent/runtime/base-state.json"); } catch { return null; } }
 function baseSha() { return process.env.AGENT_BASE_SHA || (loadBaseState() || {}).trusted_base_sha || git(["rev-parse", "HEAD"]); }
 function diffFiles(base = baseSha()) { return git(["diff", base, "--name-only"]).split("\n").filter(Boolean).map(rel); }
+function normalizeRepoPath(p) { return rel(String(p || "").replace(/\\/g, "/")).replace(/^\/+/, ""); }
+function isRuntimeEvidencePath(p) { return normalizeRepoPath(p).startsWith(".agent/runtime/"); }
+function actualImplementationDelta(base = baseSha()) { return [...new Set([...diffFiles(base), ...untrackedFiles()].map(normalizeRepoPath).filter((f) => f && !isRuntimeEvidencePath(f)))].sort(); }
+function reportedChangedFiles(r) { return [...new Set((Array.isArray(r.changed_files) ? r.changed_files : []).map(normalizeRepoPath).filter((f) => f && !isRuntimeEvidencePath(f)))].sort(); }
+function validateRuntimeReportDiff(file) {
+  const r = JSON.parse(fs.readFileSync(path.resolve(root, file), "utf8")); const errors = [];
+  if (r.outcome === "blocked" || r.outcome === "no_safe_improvement") {
+    if (Array.isArray(r.changed_files) && r.changed_files.length > 0) errors.push(`${r.outcome} result cannot claim changed files`);
+    if (errors.length) fail(errors); ok(`Runtime report/diff consistency skipped for outcome=${r.outcome}; no implementation delta is accepted.`); return;
+  }
+  const actual = actualImplementationDelta(); const reported = reportedChangedFiles(r);
+  if (!Array.isArray(r.changed_files)) errors.push("runtime-result changed_files must be an array");
+  const missing = actual.filter((f) => !reported.includes(f));
+  const invented = reported.filter((f) => !actual.includes(f));
+  if (missing.length) errors.push(`runtime-result changed_files omitted actual repository delta file(s): ${missing.join(", ")}`);
+  if (invented.length) errors.push(`runtime-result changed_files reported file(s) absent from actual repository delta: ${invented.join(", ")}`);
+  if (actual.length === 0) errors.push("actual non-runtime repository delta is empty");
+  if (reported.length === 0) errors.push("runtime-result changed_files is empty after normalizing ignored runtime evidence paths");
+  if (errors.length) fail(errors); ok(`Runtime report/diff consistency passed: ${reported.length} changed file(s) exactly match actual non-runtime repository delta.`);
+}
 function diffLines(base = baseSha()) { const out = git(["diff", base, "--numstat"]); return out.split("\n").filter(Boolean).reduce((sum, line) => { const [a,b] = line.split(/\s+/); return sum + (Number(a) || 0) + (Number(b) || 0); }, 0); }
 function untrackedFiles() { return git(["ls-files", "--others", "--exclude-standard"]).split("\n").filter(Boolean).map(rel); }
 function recordBase() {
@@ -180,6 +200,7 @@ function validateResult(file) {
   if (!["success","failed","blocked","no_safe_improvement"].includes(r.outcome)) errors.push("result outcome is outside strict enum");
   if ((r.validation || []).some((v) => v.outcome === "failed" || Number(v.exit_code) !== 0) && r.outcome === "success") errors.push("failed validation cannot be represented as success");
   if (r.outcome === "success" && (!Array.isArray(r.changed_files) || r.changed_files.length === 0)) errors.push("success result cannot have an empty changed_files list");
+  if (r.outcome === "success" || r.outcome === "failed") { try { validateRuntimeReportDiff(file); } catch (e) { errors.push(e.message); } }
   if (r.outcome === "blocked" && Array.isArray(r.changed_files) && r.changed_files.length > 0) errors.push("blocked result cannot claim changed files");
   if (r.outcome === "blocked" && !/capacity|provider|rate.?limit|exhaust/i.test(`${r.implementation_summary} ${r.known_limitations} ${r.recommended_next_direction}`)) errors.push("blocked result must carry explicit provider-capacity evidence");
   if (errors.length) fail(errors); ok(`Result gate passed for ${r.cycle_id} with outcome=${r.outcome}; validation normalized from deterministic observations.`);
@@ -191,7 +212,8 @@ try {
   else if (stage === "decision" && file) validateDecision(file);
   else if (stage === "diff" && file) validateDiff(file);
   else if (stage === "result" && file) validateResult(file);
+  else if (stage === "result-diff" && file) validateRuntimeReportDiff(file);
   else if (stage === "validation-policy" && file) { const err = validateValidationCommand(file); if (err) fail([err]); ok("Validation command accepted by policy."); }
   else if (stage === "run-validation" && file) writeJson(".agent/runtime/validation-results.json", runValidation(readJson(file)));
-  else fail(["usage: node scripts/agent-gatekeeper.js <record-base|input|decision|diff|result|validation-policy|run-validation> [artifact|command]"]);
+  else fail(["usage: node scripts/agent-gatekeeper.js <record-base|input|decision|diff|result|result-diff|validation-policy|run-validation> [artifact|command]"]);
 } catch (e) { fail([e.message]); }

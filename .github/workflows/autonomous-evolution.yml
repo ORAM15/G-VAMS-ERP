@@ -100,7 +100,8 @@ jobs:
             echo "OpenHands exited successfully but produced no repository code delta."
             exit 1
           fi
-          echo "Verified implementation repository delta."
+          node scripts/agent-gatekeeper.js result-diff .agent/runtime/runtime-result.json
+          echo "Verified implementation repository delta and exact runtime report consistency."
 
       - name: Diff Gate
         if: env.AGENT_RUNTIME_MODE == 'openhands' && hashFiles('.agent/runtime/runtime-result.json') != ''

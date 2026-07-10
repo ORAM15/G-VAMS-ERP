@@ -59,14 +59,75 @@ function validateValidationCommand(command) {
   ];
   return allowed.some((shape) => shape.length === parts.length && shape.every((s, i) => s instanceof RegExp ? s.test(parts[i]) : s === parts[i])) ? null : "validation command is not in the deterministic allowlist";
 }
+function trustedBaseConfiguredScript(command) {
+  const match = command.match(
+    /^npm --prefix (frontend|backend) run (build|test|lint)$/
+  );
+  if (!match) return null;
+
+  const [, workspace, script] = match;
+  const manifest = `${workspace}/package.json`;
+
+  let pkg;
+  try {
+    pkg = JSON.parse(
+      git(["show", `${baseSha()}:${manifest}`])
+    );
+  } catch {
+    return {
+      workspace,
+      script,
+      configured: false,
+      reason: `trusted base does not contain ${manifest}`,
+    };
+  }
+
+  const configured = Boolean(
+    pkg.scripts &&
+    typeof pkg.scripts[script] === "string" &&
+    pkg.scripts[script].trim()
+  );
+
+  return {
+    workspace,
+    script,
+    configured,
+    reason: configured
+      ? `trusted base configures npm script '${script}'`
+      : `trusted base does not configure npm script '${script}'`,
+  };
+}
 function runValidation(commands) {
   return commands.map((item) => {
     const command = typeof item === "string" ? item : item.command;
     const policyError = validateValidationCommand(command);
     if (policyError) return { command, exit_code: 127, outcome: "failed", summary: policyError };
-    if (item && typeof item === "object" && item.skip === true) {
-      return { command, exit_code: 0, outcome: "not_configured", summary: item.skip_reason || "repository does not configure this validation script" };
-    }
+  if (item && typeof item === "object" && item.skip === true) {
+  const baseScript = trustedBaseConfiguredScript(command);
+
+  if (baseScript && baseScript.configured) {
+    return {
+      command,
+      exit_code: 1,
+      outcome: "failed",
+      summary:
+        `${baseScript.workspace}/package.json removed npm script ` +
+        `'${baseScript.script}' that existed at trusted base ${baseSha()}; ` +
+        "refusing to disable planned validation",
+    };
+  }
+
+  return {
+    command,
+    exit_code: 0,
+    outcome: "not_configured",
+    summary:
+      baseScript
+        ? baseScript.reason
+        : item.skip_reason ||
+          "repository does not configure this validation script",
+  };
+}
     const parts = command.trim().split(/\s+/);
     const result = spawnSync(parts[0], parts.slice(1), { cwd: root, encoding: "utf8", shell: false, stdio: "inherit" });
     const exit = result.status === null ? 1 : result.status;

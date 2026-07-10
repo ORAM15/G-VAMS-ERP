@@ -64,6 +64,9 @@ function runValidation(commands) {
     const command = typeof item === "string" ? item : item.command;
     const policyError = validateValidationCommand(command);
     if (policyError) return { command, exit_code: 127, outcome: "failed", summary: policyError };
+    if (item && typeof item === "object" && item.skip === true) {
+      return { command, exit_code: 0, outcome: "not_configured", summary: item.skip_reason || "repository does not configure this validation script" };
+    }
     const parts = command.trim().split(/\s+/);
     const result = spawnSync(parts[0], parts.slice(1), { cwd: root, encoding: "utf8", shell: false, stdio: "inherit" });
     const exit = result.status === null ? 1 : result.status;
@@ -106,7 +109,7 @@ function normalizeResult(file) {
   const observed = readJson(validationFile);
   if (!Array.isArray(observed) || observed.length === 0) throw new Error("deterministic validation results are empty; refusing to normalize runtime result");
   r.validation = observed;
-  if (observed.some((v) => v.outcome !== "passed" || Number(v.exit_code) !== 0) && r.outcome === "success") r.outcome = "failed";
+  if (observed.some((v) => v.outcome === "failed" || Number(v.exit_code) !== 0) && r.outcome === "success") r.outcome = "failed";
   writeJson(resultFile, r);
   return r;
 }

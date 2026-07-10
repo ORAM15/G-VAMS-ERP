@@ -68,3 +68,4 @@ function check(name, changedFiles, expectedStatus, expectedText) {
 check("exact match", ["./frontend/src/App.js", "frontend/package-lock.json"], 0, "exactly match actual non-runtime repository delta");
 check("omitted actual file", ["frontend/src/App.js"], 1, "omitted actual repository delta file(s): frontend/package-lock.json");
 check("invented reported file", ["frontend/src/App.js", "frontend/package-lock.json", "frontend/src/Invented.js"], 1, "reported file(s) absent from actual repository delta: frontend/src/Invented.js");
+check("invented runtime evidence", ["frontend/src/App.js", "frontend/package-lock.json", ".agent/runtime/invented.txt"], 1, "reported file(s) absent from actual repository delta: .agent/runtime/invented.txt");

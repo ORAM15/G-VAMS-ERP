@@ -39,11 +39,13 @@ function actualImplementationDelta(base = baseSha()) { return [...new Set([...di
 function reportedChangedFiles(r) { return [...new Set((Array.isArray(r.changed_files) ? r.changed_files : []).map(normalizeRepoPath).filter(Boolean))].sort(); }
 function validateRuntimeReportDiff(file) {
   const r = JSON.parse(fs.readFileSync(path.resolve(root, file), "utf8")); const errors = [];
+  const actual = actualImplementationDelta();
   if (r.outcome === "blocked" || r.outcome === "no_safe_improvement") {
     if (Array.isArray(r.changed_files) && r.changed_files.length > 0) errors.push(`${r.outcome} result cannot claim changed files`);
-    if (errors.length) fail(errors); ok(`Runtime report/diff consistency skipped for outcome=${r.outcome}; no implementation delta is accepted.`); return;
+    if (actual.length > 0) errors.push(`${r.outcome} result cannot leave actual non-runtime repository delta file(s): ${actual.join(", ")}`);
+    if (errors.length) fail(errors); ok(`Runtime report/diff consistency passed for outcome=${r.outcome}; no non-runtime implementation delta exists.`); return;
   }
-  const actual = actualImplementationDelta(); const reported = reportedChangedFiles(r);
+  const reported = reportedChangedFiles(r);
   if (!Array.isArray(r.changed_files)) errors.push("runtime-result changed_files must be an array");
   const missing = actual.filter((f) => !reported.includes(f));
   const invented = reported.filter((f) => !actual.includes(f));

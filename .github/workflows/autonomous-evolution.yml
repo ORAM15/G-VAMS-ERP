@@ -77,6 +77,7 @@ jobs:
         run: |
           test -s .agent/runtime/implementation-openhands.jsonl || { echo "OpenHands produced no execution trace."; exit 1; }
           test -s .agent/runtime/runtime-result.json || { echo "OpenHands produced no runtime result."; exit 1; }
+          node scripts/agent-gatekeeper.js result-diff .agent/runtime/runtime-result.json
           node - <<'NODE'
           const fs = require('fs');
           const r = JSON.parse(fs.readFileSync('.agent/runtime/runtime-result.json', 'utf8'));
@@ -100,7 +101,7 @@ jobs:
             echo "OpenHands exited successfully but produced no repository code delta."
             exit 1
           fi
-          echo "Verified implementation repository delta."
+          echo "Verified implementation repository delta and exact runtime report consistency."
 
       - name: Diff Gate
         if: env.AGENT_RUNTIME_MODE == 'openhands' && hashFiles('.agent/runtime/runtime-result.json') != ''

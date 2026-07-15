@@ -155,6 +155,8 @@ jobs:
         run: |
           node -e "const r=require('./.agent/runtime/runtime-result.json'); if (r.outcome !== 'success') process.exit(1)" || { echo "Result was not success; skipping branch commit."; exit 0; }
           BRANCH="agent/$(node -e "const r=require('./.agent/runtime/runtime-result.json'); process.stdout.write(r.cycle_id)")"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$BRANCH"
           git add -A
           git commit -m "Autonomous evolution $(node -e "const r=require('./.agent/runtime/runtime-result.json'); process.stdout.write(r.cycle_id)")"

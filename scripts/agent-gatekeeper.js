@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const { execFileSync, spawnSync } = require("child_process");
 
 const root = path.resolve(__dirname, "..");
@@ -35,7 +36,21 @@ function baseSha() { return process.env.AGENT_BASE_SHA || (loadBaseState() || {}
 function diffFiles(base = baseSha()) { return git(["diff", base, "--name-only"]).split("\n").filter(Boolean).map(rel); }
 function normalizeRepoPath(p) { return rel(String(p || "").replace(/\\/g, "/")).replace(/^\/+/, ""); }
 function isRuntimeEvidencePath(p) { return normalizeRepoPath(p).startsWith(".agent/runtime/"); }
-function actualImplementationDelta(base = baseSha()) { return [...new Set([...diffFiles(base), ...untrackedFiles()].map(normalizeRepoPath).filter((f) => f && !isRuntimeEvidencePath(f)))].sort(); }
+function fileFingerprint(p) { try { return `sha256:${crypto.createHash("sha256").update(fs.readFileSync(abs(p))).digest("hex")}`; } catch { return "absent"; } }
+function currentNonRuntimeDelta(base = baseSha()) { return [...new Set([...diffFiles(base), ...untrackedFiles()])].map(normalizeRepoPath).filter((f) => f && !isRuntimeEvidencePath(f)); }
+// actualImplementationDelta represents files newly introduced or further changed by the implementation
+// runtime, i.e. the post-implementation non-runtime delta MINUS whatever was already dirty relative to
+// trusted_base_sha before implementation began (see recordBase). A pre-existing dirty path is only
+// excluded while its content fingerprint still matches the one captured at record-base time; any further
+// modification (including deletion) changes the fingerprint and is therefore still reported. If no
+// baseline was recorded, or the requested base does not match the recorded trusted base, nothing is
+// excluded, preserving the original fail-closed behavior.
+function actualImplementationDelta(base = baseSha()) {
+  const current = currentNonRuntimeDelta(base);
+  const state = loadBaseState();
+  const baseline = state && state.trusted_base_sha === base && state.preexisting_delta_files && typeof state.preexisting_delta_files === "object" ? state.preexisting_delta_files : {};
+  return current.filter((f) => !(f in baseline) || fileFingerprint(f) !== baseline[f]).sort();
+}
 function reportedChangedFiles(r) { return [...new Set((Array.isArray(r.changed_files) ? r.changed_files : []).map(normalizeRepoPath).filter(Boolean))].sort(); }
 function validateRuntimeReportDiff(file) {
   const r = JSON.parse(fs.readFileSync(path.resolve(root, file), "utf8")); const errors = [];
@@ -59,8 +74,15 @@ function diffLines(base = baseSha()) { const out = git(["diff", base, "--numstat
 function untrackedFiles() { return git(["ls-files", "--others", "--exclude-standard"]).split("\n").filter(Boolean).map(rel); }
 function recordBase() {
   const sha = git(["rev-parse", "HEAD"]), branch = git(["rev-parse", "--abbrev-ref", "HEAD"]);
-  writeJson(".agent/runtime/base-state.json", { schema_version: 1, trusted_base_sha: sha, trusted_base_branch: branch, recorded_at: new Date().toISOString() });
-  ok(`Recorded trusted base SHA ${sha} on ${branch}.`);
+  // Capture a fingerprint of every non-runtime path that is already dirty relative to `sha` right now,
+  // before the implementation runtime starts (e.g. deterministic context regeneration that ran just
+  // before this step). actualImplementationDelta() later subtracts only the paths whose fingerprint is
+  // still unchanged, so a pre-existing dirty file that the runtime further modifies (or deletes) remains
+  // detectable as implementation delta.
+  const preexisting = currentNonRuntimeDelta(sha).sort();
+  const preexisting_delta_files = Object.fromEntries(preexisting.map((f) => [f, fileFingerprint(f)]));
+  writeJson(".agent/runtime/base-state.json", { schema_version: 2, trusted_base_sha: sha, trusted_base_branch: branch, preexisting_delta_files, recorded_at: new Date().toISOString() });
+  ok(`Recorded trusted base SHA ${sha} on ${branch} with ${preexisting.length} pre-existing non-runtime delta file(s)${preexisting.length ? `: ${preexisting.join(", ")}` : ""}.`);
 }
 function validateLineage() {
   const state = loadBaseState(); if (!state) return ["missing .agent/runtime/base-state.json; base SHA was not recorded"];
@@ -207,15 +229,18 @@ function validateResult(file) {
   if (r.outcome === "blocked" && !/capacity|provider|rate.?limit|exhaust/i.test(`${r.implementation_summary} ${r.known_limitations} ${r.recommended_next_direction}`)) errors.push("blocked result must carry explicit provider-capacity evidence");
   if (errors.length) fail(errors); ok(`Result gate passed for ${r.cycle_id} with outcome=${r.outcome}; validation normalized from deterministic observations.`);
 }
-const [stage, file] = process.argv.slice(2);
-try {
-  if (stage === "record-base") recordBase();
-  else if (stage === "input") validateInput();
-  else if (stage === "decision" && file) validateDecision(file);
-  else if (stage === "diff" && file) validateDiff(file);
-  else if (stage === "result" && file) validateResult(file);
-  else if (stage === "result-diff" && file) validateRuntimeReportDiff(file);
-  else if (stage === "validation-policy" && file) { const err = validateValidationCommand(file); if (err) fail([err]); ok("Validation command accepted by policy."); }
-  else if (stage === "run-validation" && file) writeJson(".agent/runtime/validation-results.json", runValidation(readJson(file)));
-  else fail(["usage: node scripts/agent-gatekeeper.js <record-base|input|decision|diff|result|result-diff|validation-policy|run-validation> [artifact|command]"]);
-} catch (e) { fail([e.message]); }
+if (require.main === module) {
+  const [stage, file] = process.argv.slice(2);
+  try {
+    if (stage === "record-base") recordBase();
+    else if (stage === "input") validateInput();
+    else if (stage === "decision" && file) validateDecision(file);
+    else if (stage === "diff" && file) validateDiff(file);
+    else if (stage === "result" && file) validateResult(file);
+    else if (stage === "result-diff" && file) validateRuntimeReportDiff(file);
+    else if (stage === "validation-policy" && file) { const err = validateValidationCommand(file); if (err) fail([err]); ok("Validation command accepted by policy."); }
+    else if (stage === "run-validation" && file) writeJson(".agent/runtime/validation-results.json", runValidation(readJson(file)));
+    else fail(["usage: node scripts/agent-gatekeeper.js <record-base|input|decision|diff|result|result-diff|validation-policy|run-validation> [artifact|command]"]);
+  } catch (e) { fail([e.message]); }
+}
+module.exports = { actualImplementationDelta, currentNonRuntimeDelta, fileFingerprint, normalizeRepoPath, isRuntimeEvidencePath, baseSha, loadBaseState };

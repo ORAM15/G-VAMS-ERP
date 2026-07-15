@@ -2,6 +2,7 @@
 const fs = require("fs");
 const path = require("path");
 const { spawnSync, execFileSync } = require("child_process");
+const gatekeeper = require("./agent-gatekeeper.js");
 const root = path.resolve(__dirname, "..");
 const runtimeDir = path.join(root, ".agent", "runtime");
 const resultFile = path.join(runtimeDir, "runtime-result.json");
@@ -49,7 +50,7 @@ function main() {
     finalResult.validation = actual;
     if (actual.some((v) => Number(v.exit_code) !== 0 || v.outcome !== "passed")) finalResult.outcome = "failed";
   }
-  finalResult.changed_files = effectiveDelta(base).filter((f) => !f.startsWith(".agent/runtime/"));
+  finalResult.changed_files = gatekeeper.actualImplementationDelta(base);
   writeJson(resultFile, finalResult);
   if (run("node", ["scripts/agent-gatekeeper.js", "result", ".agent/runtime/runtime-result.json"]) !== 0) process.exit(1);
   if (finalResult.outcome === "success") { updateDecisions(finalResult); appendMemory(finalResult); console.log("Successful cycle state updated; workflow owns isolated branch push and PR creation."); }

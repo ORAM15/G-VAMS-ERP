@@ -206,6 +206,21 @@ function validateDiff(file) {
   if (/^[-+].*(npm test|node --check|validation|validate)/mi.test(git(["diff", base]))) console.warn("WARNING: validation-related lines changed; human review required.");
   if (errors.length) fail(errors); ok(`Diff gate passed against ${base}: ${files.length} file(s), ${lines} changed line(s), all within approved scope or agent state.`);
 }
+// scopeViolations checks each of `files` against the exact same authorization policy validateDiff() uses
+// (forbidden secret-bearing paths, protected control-plane paths, agent-state paths, and allowed_paths
+// including the existing package-lock companion policy inside underAllowed()) without exposing those
+// individual policy primitives. Returns a human-readable violation message per failing check (a single
+// path can produce more than one violation); an empty array means every path is authorized.
+function scopeViolations(files, allowedPaths) {
+  const allowed = Array.isArray(allowedPaths) ? allowedPaths : [];
+  const violations = [];
+  for (const f of files) {
+    if (isForbiddenPath(f)) violations.push(`forbidden secret-bearing path: ${f}`);
+    if (isProtected(f)) violations.push(`protected control-plane path: ${f}`);
+    if (!isAgentState(f) && !underAllowed(f, allowed)) violations.push(`out-of-scope path: ${f}`);
+  }
+  return violations;
+}
 function normalizeResult(file) {
   const resultFile = rel(path.relative(root, path.resolve(root, file)));
   const validationFile = ".agent/runtime/validation-results.json";
@@ -243,4 +258,4 @@ if (require.main === module) {
     else fail(["usage: node scripts/agent-gatekeeper.js <record-base|input|decision|diff|result|result-diff|validation-policy|run-validation> [artifact|command]"]);
   } catch (e) { fail([e.message]); }
 }
-module.exports = { actualImplementationDelta, currentNonRuntimeDelta, fileFingerprint, normalizeRepoPath, isRuntimeEvidencePath, baseSha, loadBaseState };
+module.exports = { actualImplementationDelta, currentNonRuntimeDelta, fileFingerprint, normalizeRepoPath, isRuntimeEvidencePath, baseSha, loadBaseState, scopeViolations };

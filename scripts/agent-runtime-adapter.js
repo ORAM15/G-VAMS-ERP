@@ -2,6 +2,7 @@
 const fs = require("fs");
 const path = require("path");
 const { spawnSync, execFileSync } = require("child_process");
+const gatekeeper = require("./agent-gatekeeper.js");
 
 const root = path.resolve(__dirname, "..");
 const runtimeDir = path.join(root, ".agent", "runtime");
@@ -108,6 +109,38 @@ function classifyOpenHandsEvidence(stage, provider) {
   }
   return null;
 }
+function writeReconciliationFailure(stage, runtimeVersion, model, provider, reason) {
+  writeJson(resultPath, { cycle_id: cycleId(), runtime: "openhands", runtime_version: runtimeVersion, model_provider: provider, model, decision_artifact: fs.existsSync(decisionPath) ? ".agent/runtime/current-decision.json" : null, implementation_summary: "OpenHands executed successfully but its runtime report could not be deterministically reconciled with the authorized implementation scope.", changed_files: [], validation: [{ command: `openhands --override-with-envs --headless --json -f .agent/runtime/${stage}-task.txt`, exit_code: 1, outcome: "failed", summary: reason }], outcome: "failed", known_limitations: reason, recommended_next_direction: "Inspect the actual repository delta against the approved decision's allowed_paths, narrow scope or implementation accordingly, and rerun from a fresh trusted base." });
+}
+// reconcileRuntimeResult runs after OpenHands exits successfully but before the implementation stage
+// returns. The model-authored .agent/runtime/runtime-result.json is untrusted evidence: it may omit real
+// changes (as happened with frontend/package-lock.json) or invent ones. This function replaces
+// changed_files with the authoritative gatekeeper.actualImplementationDelta() computation, but ONLY after
+// checking every actual delta path against the approved decision's allowed_paths using the exact same
+// authorization policy the Diff Gate enforces (forbidden paths, protected control-plane paths, agent-state
+// paths, and the existing package-lock companion policy). An actual change never becomes authorized simply
+// because the model reported it, and scope violations throw instead of being silently dropped or added.
+// This does not replace the independent Implementation Evidence Gate / result-diff check that runs after
+// the implementation stage returns; it only prepares trustworthy evidence for that gate to verify.
+function reconcileRuntimeResult() {
+  if (!fs.existsSync(resultPath)) throw new Error("OpenHands completed but did not produce .agent/runtime/runtime-result.json");
+  let result;
+  try {
+    result = JSON.parse(fs.readFileSync(resultPath, "utf8"));
+  } catch (error) {
+    throw new Error(`runtime-result.json is not valid JSON: ${error.message}`);
+  }
+  if (result.outcome !== "success") return result;
+  const decision = validateDecisionArtifact();
+  const actual = gatekeeper.actualImplementationDelta();
+  if (actual.length === 0) throw new Error("implementation reported success but the actual non-runtime repository delta is empty");
+  const violations = gatekeeper.scopeViolations(actual, decision.allowed_paths || []);
+  if (violations.length) throw new Error(`actual implementation delta contains unauthorized path(s) not covered by the approved decision scope: ${violations.join("; ")}`);
+  result.changed_files = actual;
+  writeJson(resultPath, result);
+  console.log(`Reconciled runtime-result.json changed_files with the authoritative actual implementation delta (${actual.length} file(s)): ${actual.join(", ")}`);
+  return result;
+}
 function openhandsImplementation(config) {
   const stage = "implementation";
   const { runtimeVersion, candidates } = requireOpenHandsConfig(config);
@@ -130,6 +163,13 @@ function openhandsImplementation(config) {
       continue;
     }
     console.log(`OpenHands implementation stage completed with pinned version ${runtimeVersion} using ${provider} model ${model}.`);
+    try {
+      reconcileRuntimeResult();
+    } catch (error) {
+      writeReconciliationFailure(stage, runtimeVersion, model, provider, error.message);
+      console.error(`RECONCILE FAILED: ${error.message}`);
+      process.exit(1);
+    }
     return;
   }
   writeProviderCapacityBlock(stage, runtimeVersion, attempts);
@@ -147,4 +187,7 @@ async function main() {
   await directGeminiDecision(config);
   return openhandsImplementation(config);
 }
-main().catch((e) => { console.error(`ERROR: ${e.message}`); process.exit(1); });
+if (require.main === module) {
+  main().catch((e) => { console.error(`ERROR: ${e.message}`); process.exit(1); });
+}
+module.exports = { reconcileRuntimeResult };

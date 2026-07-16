@@ -27,7 +27,9 @@ function ok(message) { console.log(message); }
 function isForbiddenPath(p) { const n = rel(p); return forbiddenPathPatterns.some((r) => r.test(n)); }
 function isProtected(p) { const n = rel(p); return protectedControlPlane.some((entry) => entry.endsWith("/") ? n.startsWith(entry) : n === entry); }
 function isAgentState(p) { const n = rel(p); return agentStatePaths.includes(n); }
-function isPackageLockCompanion(file, allowed) { const n = rel(file); if (path.posix.basename(n) !== "package-lock.json") return false; const manifest = path.posix.join(path.posix.dirname(n), "package.json"); return allowed.some((a) => rel(a) === manifest); }
+function isPackageLockPath(p) { return path.posix.basename(rel(p)) === "package-lock.json"; }
+function packageLockManifestPath(p) { const n = rel(p); return path.posix.join(path.posix.dirname(n), "package.json"); }
+function isPackageLockCompanion(file, allowed) { const n = rel(file); if (!isPackageLockPath(n)) return false; return allowed.some((a) => rel(a) === packageLockManifestPath(n)); }
 function underAllowed(file, allowed) { const n = rel(file); return allowed.some((a) => { const x = rel(a); return n === x || n.startsWith(x.replace(/\/$/, "") + "/"); }) || isPackageLockCompanion(n, allowed); }
 function git(args) { return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim(); }
 function loadConfig() { try { return readJson(".agent/runtime/config.json"); } catch { return {}; } }
@@ -81,8 +83,28 @@ function recordBase() {
   // detectable as implementation delta.
   const preexisting = currentNonRuntimeDelta(sha).sort();
   const preexisting_delta_files = Object.fromEntries(preexisting.map((f) => [f, fileFingerprint(f)]));
-  writeJson(".agent/runtime/base-state.json", { schema_version: 2, trusted_base_sha: sha, trusted_base_branch: branch, preexisting_delta_files, recorded_at: new Date().toISOString() });
-  ok(`Recorded trusted base SHA ${sha} on ${branch} with ${preexisting.length} pre-existing non-runtime delta file(s)${preexisting.length ? `: ${preexisting.join(", ")}` : ""}.`);
+  // A fingerprint alone cannot reconstruct content, so for any pre-existing dirty package-lock.json we also
+  // snapshot its exact current bytes under .agent/runtime/ (already excluded from implementation delta by
+  // isRuntimeEvidencePath). This lets a later "restore incidental unauthorized lockfile churn" step put a
+  // lockfile back to its true pre-implementation state -- including pre-existing dirty content -- rather
+  // than ever falling back to the trusted base SHA's committed version for a file that was already dirty.
+  const preexisting_lockfile_snapshots = {};
+  for (const f of preexisting) {
+    if (!isPackageLockPath(f)) continue;
+    try {
+      const content = fs.readFileSync(abs(f));
+      const snapshotRel = `.agent/runtime/lockfile-baseline/${Buffer.from(f, "utf8").toString("base64url")}.snapshot`;
+      fs.mkdirSync(path.dirname(abs(snapshotRel)), { recursive: true });
+      fs.writeFileSync(abs(snapshotRel), content);
+      preexisting_lockfile_snapshots[f] = snapshotRel;
+    } catch {
+      // Unreadable at the moment of capture (e.g. removed between listing and read); no snapshot is
+      // possible, so restoration will later refuse to guess and leave the file as unauthorized delta.
+    }
+  }
+  writeJson(".agent/runtime/base-state.json", { schema_version: 3, trusted_base_sha: sha, trusted_base_branch: branch, preexisting_delta_files, preexisting_lockfile_snapshots, recorded_at: new Date().toISOString() });
+  const snapshotCount = Object.keys(preexisting_lockfile_snapshots).length;
+  ok(`Recorded trusted base SHA ${sha} on ${branch} with ${preexisting.length} pre-existing non-runtime delta file(s)${preexisting.length ? `: ${preexisting.join(", ")}` : ""}${snapshotCount ? ` (captured ${snapshotCount} pre-existing lockfile snapshot(s) for incidental-churn restoration)` : ""}.`);
 }
 function validateLineage() {
   const state = loadBaseState(); if (!state) return ["missing .agent/runtime/base-state.json; base SHA was not recorded"];
@@ -258,4 +280,4 @@ if (require.main === module) {
     else fail(["usage: node scripts/agent-gatekeeper.js <record-base|input|decision|diff|result|result-diff|validation-policy|run-validation> [artifact|command]"]);
   } catch (e) { fail([e.message]); }
 }
-module.exports = { actualImplementationDelta, currentNonRuntimeDelta, fileFingerprint, normalizeRepoPath, isRuntimeEvidencePath, baseSha, loadBaseState, scopeViolations };
+module.exports = { actualImplementationDelta, currentNonRuntimeDelta, fileFingerprint, normalizeRepoPath, isRuntimeEvidencePath, baseSha, loadBaseState, scopeViolations, isPackageLockPath, packageLockManifestPath };

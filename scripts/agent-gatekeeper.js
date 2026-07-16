@@ -6,7 +6,7 @@ const { execFileSync, spawnSync } = require("child_process");
 
 const root = path.resolve(__dirname, "..");
 const requiredInputs = [".agent/PROJECT_VISION.md",".agent/AUTONOMOUS_RULES.md",".agent/DEVELOPMENT_MEMORY.md",".agent/BACKLOG.md",".agent/DAILY_DECISIONS.json",".agent/generated/AGENT_CONTEXT.md",".agent/generated/AGENT_CONTEXT.json","frontend/package.json","backend/package.json"];
-const protectedControlPlane = [".agent/AUTONOMOUS_RULES.md",".agent/PROJECT_VISION.md","scripts/agent-gatekeeper.js","scripts/agent-runtime-adapter.js","scripts/agent-cycle.js",".github/workflows/"];
+const protectedControlPlane = [".agent/AUTONOMOUS_RULES.md",".agent/PROJECT_VISION.md","scripts/agent-gatekeeper.js","scripts/agent-runtime-adapter.js","scripts/agent-cycle.js","scripts/agent-branch-publish.js",".github/workflows/"];
 const agentStatePaths = [".agent/DEVELOPMENT_MEMORY.md",".agent/BACKLOG.md",".agent/DAILY_DECISIONS.json",".agent/generated/AGENT_CONTEXT.md",".agent/generated/AGENT_CONTEXT.json",".agent/runtime/current-decision.json",".agent/runtime/runtime-result.json",".agent/runtime/base-state.json"];
 const forbiddenPathPatterns = [/^\.env(?:\.|$)/,/^\.git(?:\/|$)/,/(^|\/)\.git-credentials$/,/(^|\/)id_rsa$/,/(^|\/)id_ed25519$/,/(^|\/).*\.(pem|key|p12|pfx)$/i,/(^|\/)(secrets?|credentials?)(\.|\/|$)/i];
 const secretPatterns = [

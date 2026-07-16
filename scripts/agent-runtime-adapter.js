@@ -112,6 +112,65 @@ function classifyOpenHandsEvidence(stage, provider) {
 function writeReconciliationFailure(stage, runtimeVersion, model, provider, reason) {
   writeJson(resultPath, { cycle_id: cycleId(), runtime: "openhands", runtime_version: runtimeVersion, model_provider: provider, model, decision_artifact: fs.existsSync(decisionPath) ? ".agent/runtime/current-decision.json" : null, implementation_summary: "OpenHands executed successfully but its runtime report could not be deterministically reconciled with the authorized implementation scope.", changed_files: [], validation: [{ command: `openhands --override-with-envs --headless --json -f .agent/runtime/${stage}-task.txt`, exit_code: 1, outcome: "failed", summary: reason }], outcome: "failed", known_limitations: reason, recommended_next_direction: "Inspect the actual repository delta against the approved decision's allowed_paths, narrow scope or implementation accordingly, and rerun from a fresh trusted base." });
 }
+// lockfilePreimplementationContent proves the exact pre-implementation bytes of a package-lock.json path,
+// or returns null if no such proof exists (in which case restoration must be refused, never guessed).
+// - If the path was already dirty at record-base time, its exact pre-implementation content only exists in
+//   the snapshot captured then (a fingerprint cannot be reversed into content); a missing snapshot means no
+//   proof is available even though the path is marked dirty.
+// - If the path was clean at record-base time (not in preexisting_delta_files), its pre-implementation
+//   content is whatever is committed at the trusted base SHA, if anything -- a lockfile that appeared out of
+//   nowhere with no prior committed or captured state has no provable "restore to" target.
+function lockfilePreimplementationContent(fileRel, baseState) {
+  const snapshotRel = baseState.preexisting_lockfile_snapshots && baseState.preexisting_lockfile_snapshots[fileRel];
+  if (snapshotRel) {
+    const snapshotAbs = path.join(root, snapshotRel);
+    if (!fs.existsSync(snapshotAbs)) return null;
+    return fs.readFileSync(snapshotAbs);
+  }
+  if (fileRel in (baseState.preexisting_delta_files || {})) return null;
+  try {
+    return execFileSync("git", ["show", `${baseState.trusted_base_sha}:${fileRel}`], { cwd: root, stdio: ["ignore", "pipe", "pipe"] });
+  } catch {
+    return null;
+  }
+}
+// restoreIncidentalLockfileChurn runs after OpenHands exits successfully but before reconcileRuntimeResult()
+// performs authoritative scope reconciliation. package tooling invoked by the implementation environment can
+// incidentally rewrite a package-lock.json even when the approved improvement never intended a dependency
+// change (Run #31). This function restores ONLY a package-lock.json path that satisfies every one of:
+//   1. it is part of the actual post-implementation delta (a real change happened after baseline);
+//   2. it is NOT already authorized under the exact same policy scopeViolations()/underAllowed() enforce
+//      everywhere else -- an explicitly allowed lockfile, or one legitimately authorized via the existing
+//      package-lock companion policy, is left completely untouched (CASE B/C/E: nothing to restore, it is
+//      not a violation);
+//   3. its companion package.json in the same directory did NOT change after baseline -- a real dependency-
+//      manifest change, authorized or not, is never masked this way (CASE D stays a genuine unauthorized
+//      delta and fails closed);
+//   4. its exact pre-implementation content can be proven (see lockfilePreimplementationContent) -- absent
+//      proof, the path is left alone and falls through to fail closed like any other unauthorized change.
+// This never touches non-lockfile paths, so unrelated out-of-scope files (CASE F), protected control-plane
+// files (CASE G), and forbidden/sensitive paths (CASE H) are always left for scopeViolations() to reject.
+// It does not duplicate the authoritative git delta computation or the scope policy: both are reused as-is
+// from gatekeeper.js. Restoration is logged explicitly; nothing is hidden.
+function restoreIncidentalLockfileChurn(decision) {
+  const baseState = gatekeeper.loadBaseState();
+  if (!baseState) return [];
+  const actual = gatekeeper.actualImplementationDelta();
+  const actualSet = new Set(actual);
+  const allowedPaths = decision.allowed_paths || [];
+  const restored = [];
+  for (const f of actual) {
+    if (!gatekeeper.isPackageLockPath(f)) continue;
+    if (gatekeeper.scopeViolations([f], allowedPaths).length === 0) continue;
+    if (actualSet.has(gatekeeper.packageLockManifestPath(f))) continue;
+    const content = lockfilePreimplementationContent(f, baseState);
+    if (content === null) continue;
+    fs.writeFileSync(path.join(root, f), content);
+    restored.push(f);
+    console.log(`Restored incidental unauthorized lockfile churn to pre-implementation state: ${f}`);
+  }
+  return restored;
+}
 // reconcileRuntimeResult runs after OpenHands exits successfully but before the implementation stage
 // returns. The model-authored .agent/runtime/runtime-result.json is untrusted evidence: it may omit real
 // changes (as happened with frontend/package-lock.json) or invent ones. This function replaces
@@ -122,7 +181,7 @@ function writeReconciliationFailure(stage, runtimeVersion, model, provider, reas
 // because the model reported it, and scope violations throw instead of being silently dropped or added.
 // This does not replace the independent Implementation Evidence Gate / result-diff check that runs after
 // the implementation stage returns; it only prepares trustworthy evidence for that gate to verify.
-function reconcileRuntimeResult() {
+function reconcileRuntimeResult(decision) {
   if (!fs.existsSync(resultPath)) throw new Error("OpenHands completed but did not produce .agent/runtime/runtime-result.json");
   let result;
   try {
@@ -131,10 +190,10 @@ function reconcileRuntimeResult() {
     throw new Error(`runtime-result.json is not valid JSON: ${error.message}`);
   }
   if (result.outcome !== "success") return result;
-  const decision = validateDecisionArtifact();
+  const resolvedDecision = decision || validateDecisionArtifact();
   const actual = gatekeeper.actualImplementationDelta();
   if (actual.length === 0) throw new Error("implementation reported success but the actual non-runtime repository delta is empty");
-  const violations = gatekeeper.scopeViolations(actual, decision.allowed_paths || []);
+  const violations = gatekeeper.scopeViolations(actual, resolvedDecision.allowed_paths || []);
   if (violations.length) throw new Error(`actual implementation delta contains unauthorized path(s) not covered by the approved decision scope: ${violations.join("; ")}`);
   result.changed_files = actual;
   writeJson(resultPath, result);
@@ -164,7 +223,10 @@ function openhandsImplementation(config) {
     }
     console.log(`OpenHands implementation stage completed with pinned version ${runtimeVersion} using ${provider} model ${model}.`);
     try {
-      reconcileRuntimeResult();
+      const decision = validateDecisionArtifact();
+      const restored = restoreIncidentalLockfileChurn(decision);
+      if (restored.length) console.log(`Incidental lockfile restoration complete before reconciliation: ${restored.join(", ")}`);
+      reconcileRuntimeResult(decision);
     } catch (error) {
       writeReconciliationFailure(stage, runtimeVersion, model, provider, error.message);
       console.error(`RECONCILE FAILED: ${error.message}`);
@@ -190,4 +252,4 @@ async function main() {
 if (require.main === module) {
   main().catch((e) => { console.error(`ERROR: ${e.message}`); process.exit(1); });
 }
-module.exports = { reconcileRuntimeResult };
+module.exports = { reconcileRuntimeResult, restoreIncidentalLockfileChurn };

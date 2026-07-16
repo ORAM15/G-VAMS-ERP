@@ -6,14 +6,14 @@ This context intentionally omits wall-clock timestamps, `.env` files, tokens, pr
 
 ## Git
 
-- Branch: work
-- Current SHA: 20f355db76808bbe80096c1bfd63ca1d3d0caede
+- Branch: main
+- Current SHA: 4787d33224106fb1c9ad494076fc0b1283f2efe2
 - Recent commits:
-  - Merge autonomous evolution agent infrastructure
-  - Add autonomous evolution agent infrastructure
-  - Update project health report
-  - Merge project health automation
-  - Add project health automation
+  - Merge branch publication collision hardening
+  - Harden autonomous branch publication against name collisions
+  - Merge pull request #34 from ORAM15/fix/runtime-incidental-lockfile-churn-v2
+  - Phase 2K: restore incidental unauthorized lockfile churn
+  - Merge pull request #33 from ORAM15/fix/actions-git-author-identity
 
 ## projectVision
 

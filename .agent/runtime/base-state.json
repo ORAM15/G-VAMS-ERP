@@ -1,0 +1,11 @@
+{
+  "schema_version": 3,
+  "trusted_base_sha": "4787d33224106fb1c9ad494076fc0b1283f2efe2",
+  "trusted_base_branch": "main",
+  "preexisting_delta_files": {
+    ".agent/generated/AGENT_CONTEXT.json": "sha256:736766f0b5857de4d3d9cb14c1f26326a9013eb9d17cce5898c159548a7cb647",
+    ".agent/generated/AGENT_CONTEXT.md": "sha256:864f543a49c8b701d32ad5dc804aead25dc4f3fec82e1488216406a12aada453"
+  },
+  "preexisting_lockfile_snapshots": {},
+  "recorded_at": "2026-07-16T18:01:56.064Z"
+}

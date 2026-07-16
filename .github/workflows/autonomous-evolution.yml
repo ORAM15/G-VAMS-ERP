@@ -31,6 +31,7 @@ jobs:
           node --check scripts/agent-gatekeeper.js
           node --check scripts/agent-runtime-adapter.js
           node --check scripts/agent-cycle.js
+          node --check scripts/agent-branch-publish.js
           node -e "for (const f of ['.agent/DAILY_DECISIONS.json','.agent/schemas/decision.schema.json','.agent/schemas/runtime-result.schema.json','.agent/runtime/config.json']) { JSON.parse(require('fs').readFileSync(f, 'utf8')); console.log(f + ' is valid JSON'); }"
           node scripts/autonomous-agent-context.js
           node scripts/agent-gatekeeper.js record-base
@@ -154,13 +155,22 @@ jobs:
         if: env.AGENT_RUNTIME_MODE == 'openhands'
         run: |
           node -e "const r=require('./.agent/runtime/runtime-result.json'); if (r.outcome !== 'success') process.exit(1)" || { echo "Result was not success; skipping branch commit."; exit 0; }
-          BRANCH="agent/$(node -e "const r=require('./.agent/runtime/runtime-result.json'); process.stdout.write(r.cycle_id)")"
+          CYCLE_ID="$(node -e "const r=require('./.agent/runtime/runtime-result.json'); process.stdout.write(r.cycle_id)")"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git switch -c "$BRANCH"
           git add -A
-          git commit -m "Autonomous evolution $(node -e "const r=require('./.agent/runtime/runtime-result.json'); process.stdout.write(r.cycle_id)")"
-          git push origin "$BRANCH"
+          PENDING_TREE="$(git write-tree)"
+          DECISION="$(node scripts/agent-branch-publish.js "$CYCLE_ID" "$PENDING_TREE")"
+          ACTION="$(echo "$DECISION" | cut -d' ' -f1)"
+          BRANCH="$(echo "$DECISION" | cut -d' ' -f2)"
+          echo "Branch publication decision: action=$ACTION branch=$BRANCH"
+          if [ "$ACTION" = "reuse_existing" ]; then
+            echo "origin/$BRANCH already represents this exact result; skipping duplicate commit/push."
+          else
+            git switch -c "$BRANCH"
+            git commit -m "Autonomous evolution $CYCLE_ID"
+            git push origin "$BRANCH"
+          fi
           echo "AGENT_BRANCH=$BRANCH" >> "$GITHUB_ENV"
 
       - name: PR Creation
@@ -175,6 +185,11 @@ jobs:
           console.log(`Cycle ID: ${r.cycle_id}\n\nSelected backlog ID or repository-observed improvement: ${d.selected_backlog_id || d.repository_observed_improvement}\n\nSelected improvement: ${d.selected_improvement}\n\nSelection reason: ${d.selection_reason}\n\nDeclared scope: ${d.declared_scope}\n\nChanged files:\n${(r.changed_files || []).map(f => '- ' + f).join('\n')}\n\nActual validation commands and exit results:\n${(r.validation || []).map(v => `- ${v.command}: ${v.exit_code} (${v.outcome})`).join('\n')}\n\nKnown limitations: ${r.known_limitations}\n\nRecommended next direction: ${r.recommended_next_direction}\n\nRuntime name: ${r.runtime}\n\nRuntime pinned version: ${r.runtime_version || '1.16.0'}\n\nProvider: ${r.model_provider || 'gemini'}\n\nConfigured model identifier: ${r.model || process.env.AGENT_LLM_MODEL}`);
           NODE
           if [ -z "$AGENT_BRANCH" ]; then echo "No autonomous branch was created; skipping PR."; exit 0; fi
+          EXISTING_PR="$(gh pr list --head "$AGENT_BRANCH" --state all --json number --jq '.[0].number' || true)"
+          if [ -n "$EXISTING_PR" ]; then
+            echo "A pull request already exists for $AGENT_BRANCH (#$EXISTING_PR); skipping duplicate PR creation."
+            exit 0
+          fi
           gh pr create --base main --head "$AGENT_BRANCH" --title "Autonomous evolution $(node -e "const r=require('./.agent/runtime/runtime-result.json'); process.stdout.write(r.cycle_id)")" --body-file .agent/runtime/pr-body.md
 
       - name: Report runtime status

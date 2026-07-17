@@ -21,7 +21,6 @@ function App() {
 
     const validateSession = async () => {
       const storedToken = getToken();
-      console.debug("[auth] Stored token on load:", storedToken);
 
       if (isMounted) {
         setAuthReady(false);

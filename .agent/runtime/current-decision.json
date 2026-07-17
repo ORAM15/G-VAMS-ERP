@@ -1,0 +1,21 @@
+{
+  "cycle_id": "AE-2026-07-17-001",
+  "selected_backlog_id": "AE-BL-002",
+  "selected_improvement": "Remove sensitive token logging from frontend/src/App.js",
+  "selection_reason": "The project vision prioritizes security and maintainability. Removing sensitive token logging from browser console output is a low-risk, high-value security hygiene improvement that prevents potential credential exposure in client-side logs.",
+  "declared_scope": "frontend/src/App.js",
+  "allowed_paths": [
+    "frontend/src/App.js"
+  ],
+  "forbidden_paths": [
+    "backend/",
+    ".env",
+    "frontend/src/components/",
+    "frontend/src/pages/"
+  ],
+  "planned_validation": [
+    "npm --prefix frontend run build",
+    "npm --prefix frontend run lint"
+  ],
+  "risk_level": "low"
+}

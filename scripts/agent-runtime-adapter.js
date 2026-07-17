@@ -32,8 +32,26 @@ function writeTask(stage) {
   if (stage === "implementation") {
     const decision = fs.readFileSync(decisionPath, "utf8");
     const deltaBudget = `\nHARD DELTA BUDGET\nThe deterministic Diff Gate permits at most ${maxLines} total added plus deleted lines from the trusted base. Treat this as a hard safety ceiling, not a target. Implement the smallest viable patch and preserve existing formatting. Do not rewrite whole files, reformat unrelated code, regenerate assets, or modify lockfiles/generated files unless the approved decision explicitly requires them. Before reporting success, inspect git diff --numstat and keep the total safely below ${maxLines}. If the approved improvement cannot be completed within this budget, do not force a broad patch: write runtime-result.json with outcome=blocked, explain the limitation, and stop.\n`;
-    fs.writeFileSync(taskPath(stage), `${prefix}${deltaBudget}\nIMPLEMENTATION STAGE\nApproved decision artifact:\n${decision}\nImplement only this approved improvement. Modify only allowed_paths. Do not modify protected control-plane files or workflows. Do not stage files. Do not commit. Run relevant validation only if safe. Write .agent/runtime/runtime-result.json using .agent/schemas/runtime-result.schema.json, then stop.\n`);
+    fs.writeFileSync(taskPath(stage), `${prefix}${deltaBudget}${completionContract()}\nIMPLEMENTATION STAGE\nApproved decision artifact:\n${decision}\nImplement only this approved improvement. Modify only allowed_paths. Do not modify protected control-plane files or workflows. Do not stage files. Do not commit. Run relevant validation only if safe. Write .agent/runtime/runtime-result.json using .agent/schemas/runtime-result.schema.json, then stop.\n`);
   }
+}
+// completionContract embeds the canonical runtime-result field contract directly in the task instructions
+// every implementation candidate reads, rather than only referencing the schema file by path. It is built
+// once from the existing schema (.agent/schemas/runtime-result.schema.json) and the same REQUIRED_NARRATIVE_
+// FIELDS list reconcileRuntimeResult() enforces -- this never duplicates or diverges from those two
+// authoritative sources. writeTask() runs exactly once per implementation attempt, before the candidate
+// fallback loop in openhandsImplementation() selects a model, so this contract text is identical for the
+// primary candidate and every capacity-fallback candidate (Run #38: gemini-3.1-flash-lite must receive the
+// same explicit completion instructions as gemini-3.5-flash, not a weaker or absent one).
+function completionContract() {
+  const resultSchema = JSON.parse(fs.readFileSync(path.join(root, ".agent", "schemas", "runtime-result.schema.json"), "utf8"));
+  const narrativeGuidance = {
+    implementation_summary: "specifically and truthfully what you implemented in this cycle",
+    known_limitations: 'truthful known limitations that remain after this change (write "None known." only if genuinely none)',
+    recommended_next_direction: "your truthful recommended next step based on what you actually implemented"
+  };
+  const narrativeLines = REQUIRED_NARRATIVE_FIELDS.map((field) => `- ${field}: ${narrativeGuidance[field]}.`).join("\n");
+  return `\nREQUIRED COMPLETION REPORT\nBefore you stop, .agent/runtime/runtime-result.json MUST be a single JSON object satisfying .agent/schemas/runtime-result.schema.json and MUST include every one of these required fields: ${resultSchema.required.join(", ")}. This is checked by a deterministic gate that fails closed: it will never accept a report with a missing, empty, or non-string required field, and it will never invent missing content on your behalf. If outcome is "success", these fields specifically MUST each be a real, non-empty, truthful string written in your own words -- never omit them, leave them blank, or copy this instruction text verbatim:\n${narrativeLines}\n`;
 }
 function requireGemini(config) {
   const model = configValue(config, "model", "AGENT_LLM_MODEL");
@@ -272,4 +290,4 @@ async function main() {
 if (require.main === module) {
   main().catch((e) => { console.error(`ERROR: ${e.message}`); process.exit(1); });
 }
-module.exports = { reconcileRuntimeResult, restoreIncidentalLockfileChurn };
+module.exports = { reconcileRuntimeResult, restoreIncidentalLockfileChurn, writeTask, completionContract, classifyOpenHandsEvidence, taskPath };

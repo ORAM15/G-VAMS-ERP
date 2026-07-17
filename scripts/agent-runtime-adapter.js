@@ -10,6 +10,9 @@ const resultPath = path.join(runtimeDir, "runtime-result.json");
 const decisionPath = path.join(runtimeDir, "current-decision.json");
 const taskPath = (stage) => path.join(runtimeDir, `${stage}-task.txt`);
 const outputPath = (stage) => path.join(runtimeDir, `${stage}-openhands.jsonl`);
+// The narrative fields Result Gate requires (scripts/agent-gatekeeper.js validateResult()) that only the
+// model itself can truthfully supply -- there is no deterministic execution metadata to derive them from.
+const REQUIRED_NARRATIVE_FIELDS = ["implementation_summary", "known_limitations", "recommended_next_direction"];
 function readConfig() { return JSON.parse(fs.readFileSync(path.join(runtimeDir, "config.json"), "utf8")); }
 function cycleId() { return process.env.AGENT_CYCLE_ID || `AE-${new Date().toISOString().slice(0, 10)}-001`; }
 function writeJson(file, value) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`); }
@@ -181,6 +184,20 @@ function restoreIncidentalLockfileChurn(decision) {
 // because the model reported it, and scope violations throw instead of being silently dropped or added.
 // This does not replace the independent Implementation Evidence Gate / result-diff check that runs after
 // the implementation stage returns; it only prepares trustworthy evidence for that gate to verify.
+//
+// Run #37: a model-authored "success" report reached Result Gate missing runtime, implementation_summary,
+// known_limitations, and recommended_next_direction -- reconciliation only ever rewrote changed_files, so
+// that incompleteness silently survived all the way to Result Gate instead of being caught here, where the
+// canonical contract can actually be enforced or the run can be failed closed before further gates run.
+// This is now the single deterministic boundary that canonicalizes every producer's "success" report:
+// - `runtime` is always overwritten with the orchestration layer's own ground truth ("openhands"); this
+//   function only ever runs from openhandsImplementation(), so that value is never in doubt and a model is
+//   never trusted to assert or override it.
+// - implementation_summary / known_limitations / recommended_next_direction are truthful narrative content
+//   only the model itself can supply -- there is no deterministic execution metadata to derive them from.
+//   If OpenHands's own report omits any of them (or leaves one blank/non-string), this fails closed here
+//   with a clear reason rather than letting an incomplete "success" reach Result Gate, and rather than
+//   fabricating placeholder text.
 function reconcileRuntimeResult(decision) {
   if (!fs.existsSync(resultPath)) throw new Error("OpenHands completed but did not produce .agent/runtime/runtime-result.json");
   let result;
@@ -190,11 +207,14 @@ function reconcileRuntimeResult(decision) {
     throw new Error(`runtime-result.json is not valid JSON: ${error.message}`);
   }
   if (result.outcome !== "success") return result;
+  result.runtime = "openhands";
   const resolvedDecision = decision || validateDecisionArtifact();
   const actual = gatekeeper.actualImplementationDelta();
   if (actual.length === 0) throw new Error("implementation reported success but the actual non-runtime repository delta is empty");
   const violations = gatekeeper.scopeViolations(actual, resolvedDecision.allowed_paths || []);
   if (violations.length) throw new Error(`actual implementation delta contains unauthorized path(s) not covered by the approved decision scope: ${violations.join("; ")}`);
+  const missingNarrative = REQUIRED_NARRATIVE_FIELDS.filter((key) => typeof result[key] !== "string" || !result[key].trim());
+  if (missingNarrative.length) throw new Error(`implementation reported success but is missing required narrative field(s): ${missingNarrative.join(", ")}`);
   result.changed_files = actual;
   writeJson(resultPath, result);
   console.log(`Reconciled runtime-result.json changed_files with the authoritative actual implementation delta (${actual.length} file(s)): ${actual.join(", ")}`);

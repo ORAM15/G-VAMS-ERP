@@ -1,0 +1,44 @@
+name: Autonomous Backlog Reconciliation
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+
+jobs:
+  reconcile:
+    name: Phase 2K backlog completion reconciliation
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main' && startsWith(github.event.pull_request.head.ref, 'agent/')
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Reconcile backlog completion from merged autonomous PR
+        run: |
+          node --check scripts/agent-gatekeeper.js
+          node --check scripts/agent-backlog-reconcile.js
+          node scripts/agent-backlog-reconcile.js "${{ github.event.pull_request.number }}" "${{ github.event.pull_request.merge_commit_sha }}" "${{ github.event.pull_request.head.ref }}"
+
+      - name: Commit backlog completion state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- .agent/BACKLOG.md; then
+            echo "No backlog completion state change to commit."
+          else
+            git add .agent/BACKLOG.md
+            git commit -m "Reconcile backlog completion for PR #${{ github.event.pull_request.number }}"
+            git push origin main
+          fi

@@ -6,7 +6,7 @@ const { execFileSync, spawnSync } = require("child_process");
 
 const root = path.resolve(__dirname, "..");
 const requiredInputs = [".agent/PROJECT_VISION.md",".agent/AUTONOMOUS_RULES.md",".agent/DEVELOPMENT_MEMORY.md",".agent/BACKLOG.md",".agent/DAILY_DECISIONS.json",".agent/generated/AGENT_CONTEXT.md",".agent/generated/AGENT_CONTEXT.json","frontend/package.json","backend/package.json"];
-const protectedControlPlane = [".agent/AUTONOMOUS_RULES.md",".agent/PROJECT_VISION.md","scripts/agent-gatekeeper.js","scripts/agent-runtime-adapter.js","scripts/agent-cycle.js","scripts/agent-branch-publish.js",".github/workflows/"];
+const protectedControlPlane = [".agent/AUTONOMOUS_RULES.md",".agent/PROJECT_VISION.md","scripts/agent-gatekeeper.js","scripts/agent-runtime-adapter.js","scripts/agent-cycle.js","scripts/agent-branch-publish.js","scripts/agent-backlog-reconcile.js",".github/workflows/"];
 const agentStatePaths = [".agent/DEVELOPMENT_MEMORY.md",".agent/BACKLOG.md",".agent/DAILY_DECISIONS.json",".agent/generated/AGENT_CONTEXT.md",".agent/generated/AGENT_CONTEXT.json",".agent/runtime/current-decision.json",".agent/runtime/runtime-result.json",".agent/runtime/base-state.json"];
 const forbiddenPathPatterns = [/^\.env(?:\.|$)/,/^\.git(?:\/|$)/,/(^|\/)\.git-credentials$/,/(^|\/)id_rsa$/,/(^|\/)id_ed25519$/,/(^|\/).*\.(pem|key|p12|pfx)$/i,/(^|\/)(secrets?|credentials?)(\.|\/|$)/i];
 const secretPatterns = [
@@ -214,6 +214,13 @@ function validateDecision(file) {
   const d = JSON.parse(fs.readFileSync(path.resolve(root, file), "utf8")); const errors = [];
   for (const k of ["cycle_id","selected_improvement","selection_reason","declared_scope","allowed_paths","planned_validation","risk_level"]) if (d[k] === undefined || d[k] === null || d[k] === "" || (Array.isArray(d[k]) && d[k].length === 0)) errors.push(`decision missing required non-empty field: ${k}`);
   if (!d.selected_backlog_id && !d.repository_observed_improvement) errors.push("decision must declare selected_backlog_id or repository_observed_improvement");
+  if (d.selected_backlog_id) {
+    let backlogText = null;
+    try { backlogText = fs.readFileSync(abs(".agent/BACKLOG.md"), "utf8"); } catch { /* no backlog file to check against */ }
+    if (backlogText && backlogStatuses(backlogText)[d.selected_backlog_id] === "done") {
+      errors.push(`decision selected backlog item ${d.selected_backlog_id} which .agent/BACKLOG.md already records as done; completed backlog items cannot be re-selected`);
+    }
+  }
   if (!/^[A-Za-z0-9._:-]{3,}$/.test(d.cycle_id || "")) errors.push("cycle_id must be stable and non-empty");
   if (!["low","medium","high"].includes(d.risk_level)) errors.push("risk_level must be one of low, medium, high");
   for (const p of d.allowed_paths || []) { if (isForbiddenPath(p)) errors.push(`decision attempts to authorize forbidden path: ${p}`); if (isProtected(p)) errors.push(`decision attempts to authorize protected control-plane path: ${p}`); }
@@ -225,6 +232,7 @@ function validateDiff(file) {
   const files = [...new Set([...diffFiles(base), ...untrackedFiles()])]; const lines = diffLines(base); const errors = validateLineage();
   if (files.length === 0) errors.push("diff is empty"); if (files.length > maxFiles) errors.push(`changed file threshold exceeded: ${files.length} > ${maxFiles}`); if (lines > maxLines) errors.push(`line-change threshold exceeded: ${lines} > ${maxLines}`);
   for (const f of files) { if (isForbiddenPath(f)) errors.push(`diff changed forbidden secret-bearing path: ${f}`); if (isProtected(f)) errors.push(`diff changed protected control-plane path: ${f}`); if (!isAgentState(f) && !underAllowed(f, d.allowed_paths || [])) errors.push(`diff changed out-of-scope path: ${f}`); }
+  errors.push(...backlogCompletionTampering(base));
   if (/^[-+].*(npm test|node --check|validation|validate)/mi.test(git(["diff", base]))) console.warn("WARNING: validation-related lines changed; human review required.");
   if (errors.length) fail(errors); ok(`Diff gate passed against ${base}: ${files.length} file(s), ${lines} changed line(s), all within approved scope or agent state.`);
 }
@@ -240,6 +248,49 @@ function scopeViolations(files, allowedPaths) {
     if (isForbiddenPath(f)) violations.push(`forbidden secret-bearing path: ${f}`);
     if (isProtected(f)) violations.push(`protected control-plane path: ${f}`);
     if (!isAgentState(f) && !underAllowed(f, allowed)) violations.push(`out-of-scope path: ${f}`);
+  }
+  return violations;
+}
+// parseBacklogItems extracts each "### AE-BL-XXX" item block from .agent/BACKLOG.md text and its declared
+// Status value (the file's own documented convention: open, in-progress, blocked, done, rejected). This is
+// the single parser reused by the Decision Gate (reject re-selection of completed work), the Diff Gate
+// (reject an implementation delta that flips completion state itself), generated context, and the
+// deterministic post-merge backlog reconciliation script -- never duplicated.
+function parseBacklogItems(text) {
+  const items = [];
+  const headingRe = /^### (AE-BL-[A-Za-z0-9-]+)\s*$/gm;
+  const matches = [...text.matchAll(headingRe)];
+  for (let i = 0; i < matches.length; i += 1) {
+    const start = matches[i].index;
+    const end = i + 1 < matches.length ? matches[i + 1].index : text.length;
+    const block = text.slice(start, end);
+    const statusMatch = block.match(/^-\s*\*\*Status:\*\*\s*(\S+)\s*$/m);
+    items.push({ id: matches[i][1], status: statusMatch ? statusMatch[1] : null, start, end });
+  }
+  return items;
+}
+function backlogStatuses(text) {
+  return Object.fromEntries(parseBacklogItems(text).map((item) => [item.id, item.status]));
+}
+// backlogCompletionTampering fails closed if an implementation delta changes .agent/BACKLOG.md so that any
+// item's Status transitions INTO "done" itself. Only the deterministic post-merge
+// scripts/agent-backlog-reconcile.js may ever record that transition, driven by confirmed main-integration
+// evidence -- never the implementation runtime/model, even though BACKLOG.md is otherwise permitted agent
+// state (see agentStatePaths) so legitimate non-completion edits to the file remain unaffected.
+function backlogCompletionTampering(base = baseSha()) {
+  const backlogRel = ".agent/BACKLOG.md";
+  let before;
+  try { before = git(["show", `${base}:${backlogRel}`]); } catch { return []; }
+  let after;
+  try { after = fs.readFileSync(abs(backlogRel), "utf8"); } catch { return []; }
+  if (before === after) return [];
+  const beforeStatuses = backlogStatuses(before);
+  const afterStatuses = backlogStatuses(after);
+  const violations = [];
+  for (const [id, afterStatus] of Object.entries(afterStatuses)) {
+    if (afterStatus === "done" && beforeStatuses[id] !== "done") {
+      violations.push(`implementation delta marks backlog item ${id} done directly in ${backlogRel}; only the deterministic post-merge reconciliation script may record backlog completion`);
+    }
   }
   return violations;
 }
@@ -280,4 +331,4 @@ if (require.main === module) {
     else fail(["usage: node scripts/agent-gatekeeper.js <record-base|input|decision|diff|result|result-diff|validation-policy|run-validation> [artifact|command]"]);
   } catch (e) { fail([e.message]); }
 }
-module.exports = { actualImplementationDelta, currentNonRuntimeDelta, fileFingerprint, normalizeRepoPath, isRuntimeEvidencePath, baseSha, loadBaseState, scopeViolations, isPackageLockPath, packageLockManifestPath };
+module.exports = { actualImplementationDelta, currentNonRuntimeDelta, fileFingerprint, normalizeRepoPath, isRuntimeEvidencePath, baseSha, loadBaseState, scopeViolations, isPackageLockPath, packageLockManifestPath, parseBacklogItems, backlogStatuses, backlogCompletionTampering };

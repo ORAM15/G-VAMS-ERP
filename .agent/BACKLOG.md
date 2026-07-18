@@ -22,7 +22,8 @@ Backlog items are based on the current repository state and should be re-evaluat
 - **Suggested improvement:** Remove sensitive token logging while preserving useful non-secret diagnostics.
 - **Expected value:** Reduces the risk of credential exposure in browser logs without changing application behavior.
 - **Dependencies or blockers:** Must preserve current login, validation, and protected-route behavior.
-- **Status:** open
+- **Status:** done
+- **Completion evidence:** cycle `AE-2026-07-17-001`, PR #38, merge commit `777af5a6c47577db66be8e16516afb35481a6b3c`
 
 ### AE-BL-003
 

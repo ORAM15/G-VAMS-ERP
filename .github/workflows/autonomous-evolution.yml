@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   autonomous-cycle:
-    name: Phase 2B supervised autonomous cycle
+    name: Phase 2K supervised autonomous cycle
     runs-on: ubuntu-latest
 
     steps:
@@ -40,7 +40,7 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
             echo "AGENT_RUNTIME_MODE=disabled" >> "$GITHUB_ENV"
-            echo "Scheduled coding remains disabled during Phase 2B."
+            echo "Scheduled coding remains disabled during Phase 2K."
           else
             echo "AGENT_RUNTIME_MODE=${{ vars.AGENT_RUNTIME_MODE }}" >> "$GITHUB_ENV"
           fi

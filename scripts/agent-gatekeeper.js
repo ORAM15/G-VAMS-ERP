@@ -272,11 +272,16 @@ function parseBacklogItems(text) {
 function backlogStatuses(text) {
   return Object.fromEntries(parseBacklogItems(text).map((item) => [item.id, item.status]));
 }
-// backlogCompletionTampering fails closed if an implementation delta changes .agent/BACKLOG.md so that any
-// item's Status transitions INTO "done" itself. Only the deterministic post-merge
-// scripts/agent-backlog-reconcile.js may ever record that transition, driven by confirmed main-integration
-// evidence -- never the implementation runtime/model, even though BACKLOG.md is otherwise permitted agent
-// state (see agentStatePaths) so legitimate non-completion edits to the file remain unaffected.
+// backlogCompletionTampering fails closed if an implementation delta changes .agent/BACKLOG.md so that
+// completion state moves in either forbidden direction. Only the deterministic post-merge
+// scripts/agent-backlog-reconcile.js may ever establish or hold completion state -- never the implementation
+// runtime/model -- even though BACKLOG.md is otherwise permitted agent state (see agentStatePaths) so
+// legitimate non-completion edits to the file remain unaffected. Two symmetric checks:
+//   1. non-done -> done: an item cannot be self-declared complete by the implementation itself.
+//   2. done -> anything else (including disappearing entirely) or any edit to an already-done item's block
+//      (which would include silently rewriting its completion evidence -- cycle ID, PR number, merge commit
+//      -- while leaving Status: done untouched): once reconciliation has recorded an item as done, that
+//      item's entire block is frozen and immutable to the implementation runtime.
 function backlogCompletionTampering(base = baseSha()) {
   const backlogRel = ".agent/BACKLOG.md";
   let before;
@@ -284,12 +289,29 @@ function backlogCompletionTampering(base = baseSha()) {
   let after;
   try { after = fs.readFileSync(abs(backlogRel), "utf8"); } catch { return []; }
   if (before === after) return [];
-  const beforeStatuses = backlogStatuses(before);
-  const afterStatuses = backlogStatuses(after);
+  const beforeItems = parseBacklogItems(before);
+  const afterItems = parseBacklogItems(after);
+  const beforeStatuses = Object.fromEntries(beforeItems.map((item) => [item.id, item.status]));
+  const afterById = Object.fromEntries(afterItems.map((item) => [item.id, item]));
   const violations = [];
-  for (const [id, afterStatus] of Object.entries(afterStatuses)) {
-    if (afterStatus === "done" && beforeStatuses[id] !== "done") {
-      violations.push(`implementation delta marks backlog item ${id} done directly in ${backlogRel}; only the deterministic post-merge reconciliation script may record backlog completion`);
+  for (const afterItem of afterItems) {
+    if (afterItem.status === "done" && beforeStatuses[afterItem.id] !== "done") {
+      violations.push(`implementation delta marks backlog item ${afterItem.id} done directly in ${backlogRel}; only the deterministic post-merge reconciliation script may record backlog completion`);
+    }
+  }
+  for (const beforeItem of beforeItems) {
+    if (beforeItem.status !== "done") continue;
+    const afterItem = afterById[beforeItem.id];
+    if (!afterItem) {
+      violations.push(`implementation delta removes already-completed backlog item ${beforeItem.id} from ${backlogRel}; completed backlog items are immutable to the implementation runtime`);
+      continue;
+    }
+    if (afterItem.status !== "done") {
+      violations.push(`implementation delta changes already-completed backlog item ${beforeItem.id} from done to "${afterItem.status}" in ${backlogRel}; completed backlog items are immutable to the implementation runtime`);
+      continue;
+    }
+    if (before.slice(beforeItem.start, beforeItem.end) !== after.slice(afterItem.start, afterItem.end)) {
+      violations.push(`implementation delta modifies already-completed backlog item ${beforeItem.id} (including possibly its completion evidence) in ${backlogRel}; completed backlog items are immutable to the implementation runtime`);
     }
   }
   return violations;

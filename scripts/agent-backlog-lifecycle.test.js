@@ -57,6 +57,15 @@ const SAMPLE_BACKLOG = [
   ""
 ].join("\n");
 
+// A backlog with AE-BL-002 already reconciled as done, completion evidence included -- the base state for
+// the completed-item-immutability tests below (Codex review follow-up: backlogCompletionTampering() must be
+// symmetric, not just block non-done -> done).
+const DONE_EVIDENCE = "- **Completion evidence:** cycle `AE-2026-07-01-001`, PR #1, merge commit `1111111111111111111111111111111111111`";
+const DONE_BACKLOG = SAMPLE_BACKLOG.replace(
+  "### AE-BL-002\n\n- **Priority:** HIGH\n- **Status:** open",
+  `### AE-BL-002\n\n- **Priority:** HIGH\n- **Status:** done\n${DONE_EVIDENCE}`
+);
+
 function makeRepo() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-backlog-lifecycle-"));
   fs.mkdirSync(path.join(dir, "scripts"), { recursive: true });
@@ -77,6 +86,15 @@ function makeRepo() {
 function recordBase(dir) {
   const result = spawnSync("node", ["scripts/agent-gatekeeper.js", "record-base"], { cwd: dir, encoding: "utf8" });
   if (result.status !== 0) throw new Error(`record-base failed:\nSTDOUT:${result.stdout}\nSTDERR:${result.stderr}`);
+}
+
+// backlogCompletionTampering()'s "before" state is git.show(trusted_base_sha:...), not just whatever is in
+// the working tree when record-base runs -- an uncommitted BACKLOG.md write is invisible to it. Tests that
+// need an already-done item to genuinely be part of the trusted base must commit it first.
+function commitBacklog(dir, text) {
+  writeFile(path.join(dir, ".agent/BACKLOG.md"), text);
+  run("git", ["add", ".agent/BACKLOG.md"], dir);
+  run("git", ["commit", "-q", "-m", "seed done backlog state"], dir);
 }
 
 function decisionFixture(overrides) {
@@ -307,6 +325,130 @@ function readBacklog(dir) {
     }
     ok("Diff Gate fails closed when an implementation delta marks a backlog item done directly");
   }
+}
+
+// 11. Codex review follow-up: completed backlog state must be immutable to the implementation runtime in
+//     BOTH directions, and an already-done item's entire block (including its completion evidence) is
+//     frozen, not just its Status line.
+
+// 11a. done -> open is rejected.
+{
+  const dir = makeRepo();
+  commitBacklog(dir, DONE_BACKLOG);
+  recordBase(dir);
+  writeDecision(dir, { selected_backlog_id: "AE-BL-001", allowed_paths: ["frontend/src/App.js"] });
+  writeFile(path.join(dir, "frontend/src/App.js"), "changed\n");
+  writeFile(path.join(dir, ".agent/BACKLOG.md"), DONE_BACKLOG.replace(`### AE-BL-002\n\n- **Priority:** HIGH\n- **Status:** done\n${DONE_EVIDENCE}`, "### AE-BL-002\n\n- **Priority:** HIGH\n- **Status:** open"));
+  const gate = diffGate(dir);
+  if (gate.status === 0) throw new Error(`expected Diff Gate to reject done -> open regression:\n${gate.stdout}`);
+  if (!/AE-BL-002 from done to "open"/.test(gate.stderr)) throw new Error(`expected a clear done->open regression diagnostic, got:\n${gate.stderr}`);
+  ok("Diff Gate fails closed when an implementation delta regresses a completed item from done to open");
+}
+
+// 11b. done -> another non-done status (e.g. blocked) is rejected.
+{
+  const dir = makeRepo();
+  commitBacklog(dir, DONE_BACKLOG);
+  recordBase(dir);
+  writeDecision(dir, { selected_backlog_id: "AE-BL-001", allowed_paths: ["frontend/src/App.js"] });
+  writeFile(path.join(dir, "frontend/src/App.js"), "changed\n");
+  writeFile(path.join(dir, ".agent/BACKLOG.md"), DONE_BACKLOG.replace(`### AE-BL-002\n\n- **Priority:** HIGH\n- **Status:** done\n${DONE_EVIDENCE}`, "### AE-BL-002\n\n- **Priority:** HIGH\n- **Status:** blocked"));
+  const gate = diffGate(dir);
+  if (gate.status === 0) throw new Error(`expected Diff Gate to reject done -> blocked regression:\n${gate.stdout}`);
+  if (!/AE-BL-002 from done to "blocked"/.test(gate.stderr)) throw new Error(`expected a clear done->blocked regression diagnostic, got:\n${gate.stderr}`);
+  ok("Diff Gate fails closed when an implementation delta regresses a completed item from done to another non-done status");
+}
+
+// 11c. done -> missing/deleted backlog item is rejected.
+{
+  const dir = makeRepo();
+  commitBacklog(dir, DONE_BACKLOG);
+  recordBase(dir);
+  writeDecision(dir, { selected_backlog_id: "AE-BL-001", allowed_paths: ["frontend/src/App.js"] });
+  writeFile(path.join(dir, "frontend/src/App.js"), "changed\n");
+  writeFile(path.join(dir, ".agent/BACKLOG.md"), DONE_BACKLOG.replace(`### AE-BL-002\n\n- **Priority:** HIGH\n- **Status:** done\n${DONE_EVIDENCE}\n\n`, ""));
+  const gate = diffGate(dir);
+  if (gate.status === 0) throw new Error(`expected Diff Gate to reject deletion of a completed backlog item:\n${gate.stdout}`);
+  if (!/removes already-completed backlog item AE-BL-002/.test(gate.stderr)) throw new Error(`expected a clear item-removal diagnostic, got:\n${gate.stderr}`);
+  ok("Diff Gate fails closed when an implementation delta deletes an already-completed backlog item");
+}
+
+// 11d. open -> done remains rejected even in the presence of an unrelated already-done sibling item
+//      (regression coverage alongside the original #10d case: the fix for the reverse direction must not
+//      weaken this existing forward-direction protection).
+{
+  const dir = makeRepo();
+  commitBacklog(dir, DONE_BACKLOG);
+  recordBase(dir);
+  writeDecision(dir, { selected_backlog_id: "AE-BL-001", allowed_paths: ["frontend/src/App.js"] });
+  writeFile(path.join(dir, "frontend/src/App.js"), "changed\n");
+  writeFile(path.join(dir, ".agent/BACKLOG.md"), DONE_BACKLOG.replace("### AE-BL-001\n\n- **Priority:** HIGH\n- **Status:** open", "### AE-BL-001\n\n- **Priority:** HIGH\n- **Status:** done"));
+  const gate = diffGate(dir);
+  if (gate.status === 0) throw new Error(`expected Diff Gate to still reject open -> done self-declaration:\n${gate.stdout}`);
+  if (!/only the deterministic post-merge reconciliation script may record backlog completion/.test(gate.stderr)) {
+    throw new Error(`expected the original forward-direction diagnostic to remain intact, got:\n${gate.stderr}`);
+  }
+  ok("open -> done self-declaration remains rejected after the symmetric fix");
+}
+
+// 11e. An existing done item's completion evidence cannot be removed (Status stays done, evidence line
+//      deleted).
+{
+  const dir = makeRepo();
+  commitBacklog(dir, DONE_BACKLOG);
+  recordBase(dir);
+  writeDecision(dir, { selected_backlog_id: "AE-BL-001", allowed_paths: ["frontend/src/App.js"] });
+  writeFile(path.join(dir, "frontend/src/App.js"), "changed\n");
+  writeFile(path.join(dir, ".agent/BACKLOG.md"), DONE_BACKLOG.replace(`\n${DONE_EVIDENCE}`, ""));
+  const gate = diffGate(dir);
+  if (gate.status === 0) throw new Error(`expected Diff Gate to reject removal of completion evidence:\n${gate.stdout}`);
+  if (!/modifies already-completed backlog item AE-BL-002/.test(gate.stderr)) throw new Error(`expected a clear evidence-tampering diagnostic, got:\n${gate.stderr}`);
+  ok("Diff Gate fails closed when an implementation delta removes a completed item's completion evidence");
+}
+
+// 11f. An existing done item's completion evidence cannot be modified (e.g. PR number changed) even though
+//      Status remains done.
+{
+  const dir = makeRepo();
+  commitBacklog(dir, DONE_BACKLOG);
+  recordBase(dir);
+  writeDecision(dir, { selected_backlog_id: "AE-BL-001", allowed_paths: ["frontend/src/App.js"] });
+  writeFile(path.join(dir, "frontend/src/App.js"), "changed\n");
+  const tamperedEvidence = "- **Completion evidence:** cycle `AE-2026-07-01-001`, PR #999, merge commit `1111111111111111111111111111111111111`";
+  writeFile(path.join(dir, ".agent/BACKLOG.md"), DONE_BACKLOG.replace(DONE_EVIDENCE, tamperedEvidence));
+  const gate = diffGate(dir);
+  if (gate.status === 0) throw new Error(`expected Diff Gate to reject a modified PR number in completion evidence:\n${gate.stdout}`);
+  if (!/modifies already-completed backlog item AE-BL-002/.test(gate.stderr)) throw new Error(`expected a clear evidence-tampering diagnostic, got:\n${gate.stderr}`);
+  ok("Diff Gate fails closed when an implementation delta alters a completed item's completion evidence (PR number)");
+}
+
+// 11g. An unchanged done item passes the tampering check (no false positive on a byte-identical completed
+//      block).
+{
+  const dir = makeRepo();
+  commitBacklog(dir, DONE_BACKLOG);
+  recordBase(dir);
+  writeDecision(dir, { selected_backlog_id: "AE-BL-001", allowed_paths: ["frontend/src/App.js"] });
+  writeFile(path.join(dir, "frontend/src/App.js"), "changed\n");
+  // BACKLOG.md itself is untouched; only the approved implementation file changes.
+  const gate = diffGate(dir);
+  if (gate.status !== 0) throw new Error(`expected Diff Gate to pass when the completed item's block is byte-identical:\n${gate.stdout}\n${gate.stderr}`);
+  ok("an unchanged completed backlog item passes the tampering check");
+}
+
+// 11h. Normal permitted implementation behavior remains unaffected: editing an OPEN item's non-status
+//      content (e.g. its Priority) is still allowed, since BACKLOG.md remains permitted agent state and only
+//      completion-state transitions/tampering on already-done items are restricted.
+{
+  const dir = makeRepo();
+  commitBacklog(dir, DONE_BACKLOG);
+  recordBase(dir);
+  writeDecision(dir, { selected_backlog_id: "AE-BL-001", allowed_paths: ["frontend/src/App.js"] });
+  writeFile(path.join(dir, "frontend/src/App.js"), "changed\n");
+  writeFile(path.join(dir, ".agent/BACKLOG.md"), DONE_BACKLOG.replace("### AE-BL-001\n\n- **Priority:** HIGH\n- **Status:** open", "### AE-BL-001\n\n- **Priority:** MEDIUM\n- **Status:** open"));
+  const gate = diffGate(dir);
+  if (gate.status !== 0) throw new Error(`expected editing an open item's non-status content to remain permitted:\n${gate.stdout}\n${gate.stderr}`);
+  ok("editing an open backlog item's non-status content remains unaffected by the completed-item immutability fix");
 }
 
 console.log("All Phase 2K backlog lifecycle regression scenarios passed.");

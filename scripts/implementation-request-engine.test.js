@@ -352,4 +352,81 @@ function ok(name) {
   ok("implementation constraints and the validation checklist correctly reflect risk/size and the fixed execution policy");
 }
 
+// 14. Fail-closed: recommendations.json's timestamp does not match decision.sourceTimestamp -- decision.json
+//     was generated from a different (older or newer) recommendations.json artifact than the one now on
+//     disk, even though the selected id still happens to exist in it.
+{
+  const dir = makeFixture();
+  const mod = requireFixture(dir);
+  const decision = decisionFixture();
+  const recommendationsDoc = recommendationsFixture({ timestamp: "2026-01-01T12:00:00.000Z" });
+  let threw = null;
+  try {
+    mod.buildImplementationRequest(decision, recommendationsDoc);
+  } catch (error) {
+    threw = error;
+  }
+  if (!threw || !/decision\.json was generated from a different recommendations\.json artifact/.test(threw.message)) {
+    throw new Error(`expected a clear artifact-mismatch error for a timestamp mismatch, got: ${threw && threw.message}`);
+  }
+  ok("fails closed when recommendations.json's timestamp does not match decision.sourceTimestamp");
+}
+
+// 15. Fail-closed: recommendations.json's sourceProjectName does not match decision.sourceProjectName.
+{
+  const dir = makeFixture();
+  const mod = requireFixture(dir);
+  const decision = decisionFixture();
+  const recommendationsDoc = recommendationsFixture({ sourceProjectName: "A Different Project" });
+  let threw = null;
+  try {
+    mod.buildImplementationRequest(decision, recommendationsDoc);
+  } catch (error) {
+    threw = error;
+  }
+  if (!threw || !/decision\.json was generated from a different recommendations\.json artifact/.test(threw.message)) {
+    throw new Error(`expected a clear artifact-mismatch error for a project mismatch, got: ${threw && threw.message}`);
+  }
+  ok("fails closed when recommendations.json's sourceProjectName does not match decision.sourceProjectName");
+}
+
+// 16. Stale recommendations artifact: recommendations.json was regenerated (new timestamp) and, by
+//     coincidence, still contains an id 1 -- but it now refers to a completely different recommendation.
+//     The artifact-mismatch check must catch this BEFORE the id lookup ever runs, so the engine never
+//     silently produces a request for the wrong recommendation's content.
+{
+  const dir = makeFixture();
+  const mod = requireFixture(dir);
+  const decision = decisionFixture(); // selected id 1 against the original ("2026-01-01T00:00:00.000Z") artifact
+  const regeneratedRecommendations = recommendationsFixture({
+    timestamp: "2026-06-15T00:00:00.000Z",
+    recommendations: [
+      {
+        id: 1,
+        ruleKey: "extract-complex-logic",
+        title: "Extract Billing logic into smaller units",
+        description: "An unrelated recommendation that now happens to reuse id 1 after regeneration.",
+        reason: ["Billing has High complexity"],
+        affectedModules: ["Billing"],
+        affectedFiles: ["backend/billing/x.js"],
+        estimatedImplementationSize: "Small",
+        estimatedRisk: "Low",
+        estimatedImpact: "High",
+        confidence: 90,
+        priorityScore: 90,
+      },
+    ],
+  });
+  let threw = null;
+  try {
+    mod.buildImplementationRequest(decision, regeneratedRecommendations);
+  } catch (error) {
+    threw = error;
+  }
+  if (!threw || !/decision\.json was generated from a different recommendations\.json artifact/.test(threw.message)) {
+    throw new Error(`expected the stale artifact to be rejected before id lookup could mix in the wrong recommendation, got: ${threw && threw.message}`);
+  }
+  ok("fails closed on a stale recommendations.json artifact instead of resolving id 1 against the wrong regenerated recommendation");
+}
+
 console.log("All Implementation Request Engine v1 regression scenarios passed.");

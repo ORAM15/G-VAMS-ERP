@@ -83,6 +83,30 @@ function loadRecommendations(file) {
 }
 
 /**
+ * Verifies that the loaded recommendations.json is the exact artifact Decision Engine v1 actually read when
+ * it produced decision.json -- not merely a same-named file that happens to still exist. Decision Engine
+ * stamps decision.sourceProjectName and decision.sourceTimestamp directly from the recommendations.json it
+ * consumed (see decision-engine.js buildDecision(): `sourceProjectName: recommendationsDoc.sourceProjectName,
+ * sourceTimestamp: recommendationsDoc.timestamp`), so an unchanged recommendations.json always matches both
+ * fields, and any regeneration -- even one that happens to reuse the same numeric recommendation ids --
+ * will not. Without this check, a numeric-id-only lookup could silently resolve against a *different*
+ * recommendation than the one Decision Engine actually scored, if recommendations.json was regenerated
+ * between the two runs. Fails closed with a clear, actionable error rather than mixing artifacts.
+ * @param {{sourceProjectName: string, sourceTimestamp: string}} decision parsed decision.json
+ * @param {{sourceProjectName: string, timestamp: string}} recommendationsDoc parsed recommendations.json
+ */
+function assertMatchingArtifact(decision, recommendationsDoc) {
+  const projectMismatch = decision.sourceProjectName !== recommendationsDoc.sourceProjectName;
+  const timestampMismatch = decision.sourceTimestamp !== recommendationsDoc.timestamp;
+  if (projectMismatch || timestampMismatch) {
+    throw new Error(
+      "decision.json was generated from a different recommendations.json artifact.\n" +
+        "Please rerun the Recommendation Engine and Decision Engine before generating an Implementation Request."
+    );
+  }
+}
+
+/**
  * Finds the recommendation decision.json selected, by id, inside recommendations.json.
  * @param {object} recommendationsDoc parsed recommendations.json
  * @param {number} id
@@ -200,6 +224,8 @@ function buildImplementationRequest(decision, recommendationsDoc) {
       nextStep: buildNextStep(false),
     };
   }
+
+  assertMatchingArtifact(decision, recommendationsDoc);
 
   const recommendation = findRecommendation(recommendationsDoc, decision.selectedRecommendationId);
   if (!recommendation) {
@@ -322,6 +348,7 @@ module.exports = {
   EXECUTION_POLICY_DEFAULTS,
   loadDecision,
   loadRecommendations,
+  assertMatchingArtifact,
   findRecommendation,
   buildRequestId,
   buildImplementationConstraints,

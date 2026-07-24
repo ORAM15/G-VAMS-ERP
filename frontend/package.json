@@ -15,7 +15,9 @@
   },
   "scripts": {
     "clean": "node -e \"require('fs').rmSync(process.env.BUILD_PATH || 'build', { recursive: true, force: true })\"",
-    "prebuild": "npm run clean",
+    "sync:autonomous-data": "node scripts/sync-autonomous-data.js",
+    "prebuild": "npm run clean && npm run sync:autonomous-data",
+    "prestart": "npm run sync:autonomous-data",
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",

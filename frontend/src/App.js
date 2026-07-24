@@ -7,6 +7,7 @@ import Timetable from "./pages/Timetable";
 import Attendance from "./pages/Attendance";
 import LMS from "./pages/LMS";
 import Leave from "./pages/Leave";
+import AutonomousEngineer from "./pages/AutonomousEngineer";
 import ProtectedRoute from "./components/ProtectedRoute";
 import { apiRequest } from "./utils/api";
 import { clearSession, getToken, saveSession } from "./utils/auth";
@@ -98,6 +99,7 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={rootElement} />
+        <Route path="/autonomous-engineer" element={<AutonomousEngineer />} />
         <Route
           element={
             <ProtectedRoute

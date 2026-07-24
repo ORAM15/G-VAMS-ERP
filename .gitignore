@@ -26,3 +26,11 @@ npm-debug.log
 # Engineering Knowledge Engine v1 generated output (timestamped on every run; regenerate with
 # `node scripts/engineering-knowledge.js`)
 /engineering-knowledge/
+
+# Recommendation Engine v1 generated output (timestamped on every run; regenerate with
+# `node scripts/recommendation-engine.js`)
+/recommendations/
+
+# Autonomous Engineer Dashboard's synced copy of the three generated JSON files above (see
+# frontend/scripts/sync-autonomous-data.js); regenerated automatically by `npm start` / `npm run build`
+frontend/public/autonomous-engineer-data/

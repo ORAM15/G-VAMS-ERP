@@ -391,4 +391,41 @@ function ok(name) {
   ok("the real six-stage chain produces a valid, internally-consistent execution record end to end");
 }
 
+// 13. providerEvidence defaults to null for the stub provider (and for the skipped/blocked cases): it is
+//     never fabricated for a provider that has no real evidence to report.
+{
+  const dir = makeFixture();
+  const mod = requireFixture(dir);
+  if (mod.buildSkippedExecution(EMPTY_REQUEST_FIXTURE).providerEvidence !== null) throw new Error("expected providerEvidence to be null for a skipped execution");
+  if (mod.buildBlockedExecution(requestFixture(), { violations: ["x"] }).providerEvidence !== null) throw new Error("expected providerEvidence to be null for a blocked execution");
+  const normalized = mod.normalizeProviderResult({ outcome: "success", filesChanged: [], testsRun: 1, testsOk: 1, notes: [], problems: [], summary: "ok" });
+  if (normalized.providerEvidence !== null) throw new Error("expected providerEvidence to default to null when the provider's raw response did not include it (as the stub never does)");
+  ok("providerEvidence defaults to null for the stub provider and for skipped/blocked executions, rather than being fabricated");
+}
+
+// 14. patch-summary.json is generated alongside execution.json/execution.md, with v1's honest empty
+//     defaults for fields the generic provider contract cannot determine.
+{
+  const dir = makeFixture();
+  const mod = requireFixture(dir);
+  const request = requestFixture();
+  const { raw, startTime, endTime } = mod.invokeProvider(mod.stubProviderAdapter, request);
+  const execution = mod.buildCompletedExecution(request, "stub-deterministic-v1", startTime, endTime, mod.normalizeProviderResult(raw));
+  const patchSummary = mod.buildPatchSummary(execution);
+  if (patchSummary.requestId !== execution.requestId || patchSummary.provider !== execution.provider) throw new Error("expected patch-summary.json to reference the same request/provider as execution.json");
+  if (JSON.stringify(patchSummary.modifiedFiles) !== JSON.stringify(execution.modifiedFiles)) throw new Error("expected patch-summary.json's modifiedFiles to match execution.json's");
+  for (const field of ["createdFiles", "deletedFiles", "functionsAdded", "functionsModified", "functionsRemoved"]) {
+    if (!Array.isArray(patchSummary[field]) || patchSummary[field].length !== 0) throw new Error(`expected v1's honest empty default for ${field}`);
+  }
+  if (patchSummary.testsAdded !== 0 || patchSummary.testsModified !== 0) throw new Error("expected v1's honest zero default for testsAdded/testsModified");
+  if (patchSummary.breakingChangesDetected !== false) throw new Error("expected breakingChangesDetected to default to false, never assumed");
+
+  const { jsonPath, mdPath, patchPath } = mod.writeOutputs(execution);
+  if (path.basename(patchPath) !== "patch-summary.json") throw new Error(`expected the output named patch-summary.json, got ${patchPath}`);
+  if (!fs.existsSync(jsonPath) || !fs.existsSync(mdPath) || !fs.existsSync(patchPath)) throw new Error("expected execution.json, execution.md, and patch-summary.json to all be written");
+  const writtenPatchSummary = JSON.parse(fs.readFileSync(patchPath, "utf8"));
+  if (writtenPatchSummary.provider !== "stub-deterministic-v1") throw new Error("expected the written patch-summary.json to reflect the actual provider used");
+  ok("writeOutputs generates patch-summary.json alongside execution.json/execution.md, with honest empty defaults for undeterminable fields");
+}
+
 console.log("All Implementation Executor v1 regression scenarios passed.");

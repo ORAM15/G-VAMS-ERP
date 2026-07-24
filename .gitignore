@@ -38,3 +38,7 @@ frontend/public/autonomous-engineer-data/
 # Decision Engine v1 generated output (timestamped on every run; regenerate with
 # `node scripts/decision-engine.js`)
 /decision/
+
+# Implementation Request Engine v1 generated output (timestamped on every run; regenerate with
+# `node scripts/implementation-request-engine.js`)
+/implementation-request/

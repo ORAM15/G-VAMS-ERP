@@ -26,3 +26,7 @@ npm-debug.log
 # Engineering Knowledge Engine v1 generated output (timestamped on every run; regenerate with
 # `node scripts/engineering-knowledge.js`)
 /engineering-knowledge/
+
+# Recommendation Engine v1 generated output (timestamped on every run; regenerate with
+# `node scripts/recommendation-engine.js`)
+/recommendations/

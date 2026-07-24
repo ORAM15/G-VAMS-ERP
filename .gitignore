@@ -18,3 +18,7 @@ npm-debug.log
 .agent/runtime/planned-validation.json
 .agent/runtime/validation-results.json
 .agent/runtime/pr-body.md
+
+# Repository Intelligence v1 generated output (timestamped on every run; regenerate with
+# `node scripts/repository-intelligence.js`)
+/repository-intelligence/

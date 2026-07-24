@@ -22,3 +22,7 @@ npm-debug.log
 # Repository Intelligence v1 generated output (timestamped on every run; regenerate with
 # `node scripts/repository-intelligence.js`)
 /repository-intelligence/
+
+# Engineering Knowledge Engine v1 generated output (timestamped on every run; regenerate with
+# `node scripts/engineering-knowledge.js`)
+/engineering-knowledge/

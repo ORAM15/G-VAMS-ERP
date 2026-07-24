@@ -42,3 +42,7 @@ frontend/public/autonomous-engineer-data/
 # Implementation Request Engine v1 generated output (timestamped on every run; regenerate with
 # `node scripts/implementation-request-engine.js`)
 /implementation-request/
+
+# Implementation Executor v1 generated output (timestamped on every run; regenerate with
+# `node scripts/implementation-executor.js`)
+/execution/

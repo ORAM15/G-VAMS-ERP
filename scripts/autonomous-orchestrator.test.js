@@ -5,8 +5,8 @@
 // readIterationOutcome (fast, deterministic, no real engines needed and never touching this actual
 // repository's own artifacts). The CLI is exercised against real subprocesses using tiny fake stage scripts
 // (controllable exit codes, mirroring the fake-"claude"/fake-"gh" technique used elsewhere in this
-// pipeline), and one true end-to-end run drives the real twelve-stage chain (including Run History Manager
-// and Engineering Memory).
+// pipeline), and one true end-to-end run drives the real thirteen-stage chain (including Run History
+// Manager, Historical Context Retriever, and Engineering Memory).
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -16,11 +16,13 @@ const repoRoot = path.resolve(__dirname, "..");
 const source = fs.readFileSync(path.join(repoRoot, "scripts/autonomous-orchestrator.js"), "utf8");
 const runHistoryManagerSource = fs.readFileSync(path.join(repoRoot, "scripts/run-history-manager.js"), "utf8");
 const engineeringMemorySource = fs.readFileSync(path.join(repoRoot, "scripts/engineering-memory.js"), "utf8");
+const historicalContextRetrieverSource = fs.readFileSync(path.join(repoRoot, "scripts/historical-context-retriever.js"), "utf8");
 
-// The nine pipeline engines this orchestrator spawns as real subprocesses. Run History Manager and
-// Engineering Memory are deliberately NOT in this list -- both are require()'d in-process (see
-// runHistoryStage()/runMemoryStage() in autonomous-orchestrator.js), never spawned, so they each need a
-// real, valid module file, not a fake exit-code stub script.
+// The eight pipeline engines this orchestrator spawns as real subprocesses. Run History Manager, Engineering
+// Memory, and Historical Context Retriever are deliberately NOT in this list -- all three are require()'d
+// in-process (see runHistoryStage()/runMemoryStage()/runHistoricalContextStage() in
+// autonomous-orchestrator.js), never spawned, so they each need a real, valid module file, not a fake
+// exit-code stub script.
 const ENGINE_SCRIPTS = [
   "repository-intelligence.js",
   "engineering-knowledge.js",
@@ -35,24 +37,34 @@ const ENGINE_SCRIPTS = [
 ];
 
 // Stages that are always require()'d in-process, never spawned via spawnFn -- excluded from any assertion
-// counting "spawned" invocations.
-const IN_PROCESS_SCRIPTS = ["run-history-manager.js", "engineering-memory.js"];
+// counting "spawned" invocations, and from "must be SKIPPED after a failure" checks (since some of these,
+// see UNCONDITIONAL_IN_PROCESS_SCRIPTS below, run no matter what).
+const IN_PROCESS_SCRIPTS = ["run-history-manager.js", "engineering-memory.js", "historical-context-retriever.js"];
+
+// The subset of IN_PROCESS_SCRIPTS that run truly unconditionally, regardless of `stopped` -- Run History
+// Manager and Engineering Memory both run once the whole run concludes (approved, rejected, or exhausted).
+// Historical Context Retriever is NOT in this list: it sits mid-pipeline (between Engineering Knowledge and
+// Recommendation Engine) and is skipped exactly like any other upfront stage if an earlier stage already
+// stopped the run -- only ITS OWN failure (not an earlier stage's) is non-blocking.
+const UNCONDITIONAL_IN_PROCESS_SCRIPTS = ["run-history-manager.js", "engineering-memory.js"];
 
 function writeFile(file, content) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, content);
 }
 
-// Every fixture also gets real copies of run-history-manager.js and engineering-memory.js alongside
-// autonomous-orchestrator.js, since runHistoryStage()/runMemoryStage() require() them in-process (not
-// through the injected spawnFn) -- without them, every runOrchestration() call in these tests would report
-// both stages as "WARN" (module not found) rather than genuinely exercising them.
+// Every fixture also gets real copies of run-history-manager.js, engineering-memory.js, and
+// historical-context-retriever.js alongside autonomous-orchestrator.js, since
+// runHistoryStage()/runMemoryStage()/runHistoricalContextStage() require() them in-process (not through the
+// injected spawnFn) -- without them, every runOrchestration() call in these tests would report all three
+// stages as "WARN" (module not found) rather than genuinely exercising them.
 function makeFixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "autonomous-orchestrator-"));
   fs.mkdirSync(path.join(dir, "scripts"), { recursive: true });
   fs.writeFileSync(path.join(dir, "scripts/autonomous-orchestrator.js"), source);
   fs.writeFileSync(path.join(dir, "scripts/run-history-manager.js"), runHistoryManagerSource);
   fs.writeFileSync(path.join(dir, "scripts/engineering-memory.js"), engineeringMemorySource);
+  fs.writeFileSync(path.join(dir, "scripts/historical-context-retriever.js"), historicalContextRetrieverSource);
   return dir;
 }
 
@@ -118,10 +130,14 @@ function ok(name) {
   if (remaining.some((s) => s.status !== "SKIPPED" || s.exitCode !== null || s.startTime !== null || s.durationMs !== null)) {
     throw new Error(`expected every remaining spawned stage to be cleanly SKIPPED (no exit code, no timing), got: ${JSON.stringify(remaining)}`);
   }
-  for (const script of IN_PROCESS_SCRIPTS) {
+  for (const script of UNCONDITIONAL_IN_PROCESS_SCRIPTS) {
     const stage = result.stages.find((s) => s.script === script);
     if (stage.status !== "PASS") throw new Error(`expected ${script} to still run (and succeed) unconditionally, even after an upfront failure`);
   }
+  // Historical Context Retriever sits BEFORE recommendation-engine.js, so it already ran (and passed) before
+  // this failure occurred -- it is not among the SKIPPED "remaining" stages either.
+  const historicalContextStage = result.stages.find((s) => s.script === "historical-context-retriever.js");
+  if (historicalContextStage.status !== "PASS") throw new Error("expected Historical Context Retriever, positioned before the failure, to have already run and succeeded");
   if (result.iterationsUsed !== 0) throw new Error(`expected 0 loop iterations to be attempted after an upfront failure, got: ${result.iterationsUsed}`);
   ok("every spawned stage after an upfront failure is SKIPPED except Run History Manager/Engineering Memory, which still run unconditionally, and the loop is never entered");
 }
@@ -303,6 +319,7 @@ function ok(name) {
   fs.writeFileSync(path.join(cliDir, "scripts/autonomous-orchestrator.js"), source);
   fs.writeFileSync(path.join(cliDir, "scripts/run-history-manager.js"), runHistoryManagerSource);
   fs.writeFileSync(path.join(cliDir, "scripts/engineering-memory.js"), engineeringMemorySource);
+  fs.writeFileSync(path.join(cliDir, "scripts/historical-context-retriever.js"), historicalContextRetrieverSource);
   for (const script of ENGINE_SCRIPTS) {
     const shouldFail = script === "decision-engine.js";
     writeFile(
@@ -318,10 +335,11 @@ function ok(name) {
   if (failedRunJson.status !== "failed") throw new Error(`expected run.json status "failed", got: ${failedRunJson.status}`);
   for (const script of IN_PROCESS_SCRIPTS) {
     const stage = failedRunJson.stages.find((s) => s.script === script);
-    if (!stage || stage.status !== "PASS") throw new Error(`expected ${script} to still run and succeed even after an upfront stage failure`);
+    if (!stage || stage.status !== "PASS") throw new Error(`expected ${script} to still have PASSed (either unconditionally, or by already having run before decision-engine.js's later failure)`);
   }
   if (!fs.existsSync(path.join(cliDir, "runs", "RUN-000001"))) throw new Error("expected a runs/RUN-000001 archive to be created even for a failed run");
   if (!fs.existsSync(path.join(cliDir, "memory", "engineering-memory.json"))) throw new Error("expected memory/engineering-memory.json to be created even for a failed run");
+  if (!fs.existsSync(path.join(cliDir, "historical-context", "historical-context.json"))) throw new Error("expected historical-context/historical-context.json to be created (it ran before the later decision-engine.js failure)");
 
   for (const script of ENGINE_SCRIPTS) {
     writeFile(path.join(cliDir, "scripts", script), `console.log("fake stage ok: ${script}"); process.exit(0);\n`);
@@ -348,9 +366,9 @@ function ok(name) {
   ok("the real CLI, run against real (fake) stage subprocesses, exits 1 and stops immediately on an upfront failure, and exits 0 when every stage passes and validation is approved -- both runs archived sequentially under runs/");
 }
 
-// 14. End-to-end execution: the real ten-stage chain, driven entirely by the real orchestrator CLI using the
-//     real engine sources (including the real Reflection Engine), produces a valid, internally-consistent
-//     run.json/run.md.
+// 14. End-to-end execution: the real thirteen-stage chain, driven entirely by the real orchestrator CLI using
+//     the real engine sources (including the real Reflection Engine and Historical Context Retriever),
+//     produces a valid, internally-consistent run.json/run.md.
 {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "autonomous-orchestrator-e2e-"));
   fs.mkdirSync(path.join(dir, "scripts"), { recursive: true });
@@ -359,6 +377,7 @@ function ok(name) {
   for (const relPath of [
     "scripts/repository-intelligence.js",
     "scripts/engineering-knowledge.js",
+    "scripts/historical-context-retriever.js",
     "scripts/recommendation-engine.js",
     "scripts/decision-engine.js",
     "scripts/implementation-request-engine.js",
@@ -381,12 +400,19 @@ function ok(name) {
   if (!fs.existsSync(jsonPath) || !fs.existsSync(mdPath)) throw new Error(`expected run.json and run.md to be produced by the real end-to-end chain:\n${run.stdout}\n${run.stderr}`);
 
   const runRecord = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
-  if (runRecord.stages.length !== 12) throw new Error(`expected all 12 real stages (including Run History Manager and Engineering Memory) to be recorded, got: ${runRecord.stages.length}`);
+  if (runRecord.stages.length !== 13) throw new Error(`expected all 13 real stages (including Run History Manager, Historical Context Retriever, and Engineering Memory) to be recorded, got: ${runRecord.stages.length}`);
   if (!runRecord.stages.some((s) => s.script === "reflection-engine.js")) throw new Error("expected Reflection Engine to be recorded among the real stages");
   const historyStage = runRecord.stages.find((s) => s.script === "run-history-manager.js");
   if (!historyStage || historyStage.status !== "PASS") throw new Error(`expected Run History Manager to genuinely succeed in the real end-to-end chain, got: ${JSON.stringify(historyStage)}`);
   const memoryStage = runRecord.stages.find((s) => s.script === "engineering-memory.js");
   if (!memoryStage || memoryStage.status !== "PASS") throw new Error(`expected Engineering Memory to genuinely succeed in the real end-to-end chain, got: ${JSON.stringify(memoryStage)}`);
+  const historicalContextStage = runRecord.stages.find((s) => s.script === "historical-context-retriever.js");
+  if (!historicalContextStage || historicalContextStage.status !== "PASS") throw new Error(`expected Historical Context Retriever to genuinely succeed in the real end-to-end chain, got: ${JSON.stringify(historicalContextStage)}`);
+  const historicalContextIndex = runRecord.stages.findIndex((s) => s.script === "historical-context-retriever.js");
+  const recommendationIndex = runRecord.stages.findIndex((s) => s.script === "recommendation-engine.js");
+  if (historicalContextIndex === -1 || recommendationIndex === -1 || historicalContextIndex >= recommendationIndex) {
+    throw new Error("expected Historical Context Retriever to run before Recommendation Engine in the real chain");
+  }
   if (!runRecord.runHistory || !fs.existsSync(path.join(dir, "runs", runRecord.runHistory.runId, "metadata.json"))) {
     throw new Error(`expected a real runs/${runRecord.runHistory && runRecord.runHistory.runId}/metadata.json archive to exist`);
   }
@@ -394,17 +420,21 @@ function ok(name) {
     throw new Error("expected a real memory/engineering-memory.json to exist, referenced from run.json's own engineeringMemory field");
   }
   if (runRecord.engineeringMemory.runsAnalyzed < 1) throw new Error("expected Engineering Memory to have analyzed at least the run it was just given (Run History Manager runs first)");
+  if (!runRecord.historicalContext || typeof runRecord.historicalContext.query !== "string") {
+    throw new Error("expected a real historicalContext field with a query, referenced from run.json's own historicalContext field");
+  }
   if (run.status === 0) {
     if (runRecord.status !== "success" || runRecord.stages.some((s) => s.status !== "PASS")) throw new Error(`expected a fully passing real run.json, got: ${JSON.stringify(runRecord.stages)}`);
     if (!runRecord.artifactsProduced.includes("publish/publish.json")) throw new Error("expected publish/publish.json to be listed as a produced artifact for a fully successful real run");
     if (!runRecord.artifactsProduced.includes("reflection/reflection-report.json")) throw new Error("expected reflection/reflection-report.json to be listed as a produced artifact");
     if (!runRecord.artifactsProduced.includes("memory/engineering-memory.json")) throw new Error("expected memory/engineering-memory.json to be listed as a produced artifact");
+    if (!runRecord.artifactsProduced.includes("historical-context/historical-context.json")) throw new Error("expected historical-context/historical-context.json to be listed as a produced artifact");
     if (runRecord.runHistory.archivedFiles.length === 0) throw new Error("expected the real successful run to have archived at least one real artifact");
   } else {
     if (runRecord.status !== "failed") throw new Error(`expected run.json status "failed" to match a non-zero CLI exit code, got: ${runRecord.status}`);
   }
 
-  ok("the real twelve-stage chain, driven by the real orchestrator CLI (including Reflection Engine, Run History Manager, and Engineering Memory), produces a valid and internally-consistent run.json/run.md end to end, with real runs/ and memory/ output");
+  ok("the real thirteen-stage chain, driven by the real orchestrator CLI (including Reflection Engine, Historical Context Retriever, Run History Manager, and Engineering Memory), produces a valid and internally-consistent run.json/run.md end to end, with real runs/, historical-context/, and memory/ output");
 }
 
 // 15. Run History Manager integration: it is called exactly once (in-process, never via spawnFn) after the
@@ -509,8 +539,9 @@ function ok(name) {
   if (calls.length !== 1) throw new Error(`expected Run History Manager to be invoked exactly once even after a retry, got: ${calls.length}`);
   if (calls[0].iterations !== 2 || calls[0].retryCount !== 1) throw new Error(`expected the history context to reflect the real 2 iterations / 1 retry, got: ${JSON.stringify({ iterations: calls[0].iterations, retryCount: calls[0].retryCount })}`);
   if (calls[0].validationScore !== 95) throw new Error(`expected the history context to reflect the FINAL iteration's validation score, got: ${calls[0].validationScore}`);
-  // stageResults = 5 upfront stages + both iterations' 3 loop stages each (6) = 11 total.
-  if (calls[0].stageResults.length !== 11) throw new Error(`expected stageResults to include the 5 upfront stages plus both iterations' 3 stages each (11 total), got: ${calls[0].stageResults.length}`);
+  // stageResults = 6 upfront stages (including Historical Context Retriever) + both iterations' 3 loop
+  // stages each (6) = 12 total.
+  if (calls[0].stageResults.length !== 12) throw new Error(`expected stageResults to include the 6 upfront stages plus both iterations' 3 stages each (12 total), got: ${calls[0].stageResults.length}`);
   const loopStageNames = calls[0].stageResults.filter((s) => s.name === "Implementation Executor").length;
   if (loopStageNames !== 2) throw new Error(`expected Implementation Executor to appear twice in stageResults (once per iteration), got: ${loopStageNames}`);
   if (result.status !== "success") throw new Error("expected the run to ultimately succeed after the retry");
@@ -593,6 +624,118 @@ function ok(name) {
   if (calls.length !== 1) throw new Error("expected Engineering Memory to still be invoked once after a failed validation");
   if (result.status !== "failed") throw new Error("expected the overall run to be reported as failed");
   ok("Engineering Memory runs (exactly once) even when validation is rejected");
+}
+
+// 22. Historical Context Retriever integration: it is called exactly once (in-process, never via spawnFn),
+//     AFTER Engineering Knowledge and BEFORE Recommendation Engine -- verified via an injected fake module.
+{
+  const dir = makeFixture();
+  const mod = requireFixture(dir);
+  const calls = [];
+  const fakeHistoricalContextRetriever = {
+    retrieveSync: (options) => (
+      calls.push(options),
+      { context: { query: "Authentication", matchingRuns: [{ runId: "RUN-000001" }], confidence: 0.8 }, jsonPath: path.join(dir, "historical-context", "historical-context.json"), mdPath: "" }
+    ),
+  };
+  const result = mod.runOrchestration({
+    spawnFn: makeFakeSpawn(null),
+    cwd: dir,
+    historicalContextRetriever: fakeHistoricalContextRetriever,
+    readIterationOutcome: () => ({ approvedForPR: true, retryRecommended: false, validationScore: 100 }),
+  });
+  if (calls.length !== 1) throw new Error(`expected Historical Context Retriever to be invoked exactly once, got: ${calls.length}`);
+  const knowledgeIndex = result.stages.findIndex((s) => s.script === "engineering-knowledge.js");
+  const historicalContextIndex = result.stages.findIndex((s) => s.script === "historical-context-retriever.js");
+  const recommendationIndex = result.stages.findIndex((s) => s.script === "recommendation-engine.js");
+  if (knowledgeIndex === -1 || historicalContextIndex === -1 || recommendationIndex === -1 || !(knowledgeIndex < historicalContextIndex && historicalContextIndex < recommendationIndex)) {
+    throw new Error("expected Historical Context Retriever to run after Engineering Knowledge and before Recommendation Engine");
+  }
+  if (!result.historicalContext || result.historicalContext.query !== "Authentication" || result.historicalContext.matchingRuns !== 1) {
+    throw new Error("expected the run record's historicalContext field to reflect what Historical Context Retriever actually returned");
+  }
+  ok("Historical Context Retriever is invoked exactly once, in-process, positioned after Engineering Knowledge and before Recommendation Engine");
+}
+
+// 23. Historical Context Retriever failure never crashes the orchestrator: an injected module whose
+//     retrieveSync throws is caught, logged ("Historical Context failed"), and the run continues to
+//     completion, including Recommendation Engine and the rest of the pipeline.
+{
+  const dir = makeFixture();
+  const mod = requireFixture(dir);
+  const throwingHistoricalContextRetriever = {
+    retrieveSync: () => {
+      throw new Error("simulated corrupted historical-context input");
+    },
+  };
+  const originalError = console.error;
+  let loggedHistoricalContextFailure = false;
+  console.error = (...args) => {
+    if (args.join(" ").includes("Historical Context failed")) loggedHistoricalContextFailure = true;
+  };
+  let result;
+  try {
+    result = mod.runOrchestration({
+      spawnFn: makeFakeSpawn(null),
+      cwd: dir,
+      historicalContextRetriever: throwingHistoricalContextRetriever,
+      readIterationOutcome: () => ({ approvedForPR: true, retryRecommended: false, validationScore: 100 }),
+    });
+  } finally {
+    console.error = originalError;
+  }
+  if (!loggedHistoricalContextFailure) throw new Error('expected "Historical Context failed" to be logged when retrieveSync throws');
+  const historicalContextStage = result.stages.find((s) => s.script === "historical-context-retriever.js");
+  if (historicalContextStage.status === "FAIL") throw new Error("expected a Historical Context Retriever failure to never be reported as a blocking FAIL");
+  if (result.status !== "success") throw new Error(`expected the orchestrator to still succeed overall despite Historical Context Retriever failing, got: ${result.status}`);
+  const recommendationStage = result.stages.find((s) => s.script === "recommendation-engine.js");
+  if (recommendationStage.status !== "PASS") throw new Error("expected Recommendation Engine to still run normally after a Historical Context Retriever failure");
+  if (result.historicalContext !== null) throw new Error("expected historicalContext to be null when retrieval failed, never a fabricated result");
+  ok("Historical Context Retriever throwing never crashes the orchestrator: it is logged, does not block Recommendation Engine, and the run still succeeds overall");
+}
+
+// 24. Historical Context Retriever is SKIPPED (like any other upfront stage), never even attempted, when an
+//     earlier upfront stage (before it in the pipeline) has already failed -- distinct from Run History
+//     Manager/Engineering Memory, which run unconditionally regardless of `stopped`.
+{
+  const dir = makeFixture();
+  const mod = requireFixture(dir);
+  const calls = [];
+  const fakeHistoricalContextRetriever = { retrieveSync: (options) => (calls.push(options), { context: { query: "X", matchingRuns: [], confidence: 0 }, jsonPath: "", mdPath: "" }) };
+  const result = mod.runOrchestration({
+    spawnFn: makeFakeSpawn("engineering-knowledge.js"),
+    cwd: dir,
+    historicalContextRetriever: fakeHistoricalContextRetriever,
+  });
+  if (calls.length !== 0) throw new Error(`expected Historical Context Retriever to never be invoked once an earlier upfront stage has failed, got: ${calls.length}`);
+  const historicalContextStage = result.stages.find((s) => s.script === "historical-context-retriever.js");
+  if (historicalContextStage.status !== "SKIPPED" || historicalContextStage.exitCode !== null || historicalContextStage.durationMs !== null) {
+    throw new Error(`expected Historical Context Retriever to be cleanly SKIPPED after an earlier upfront failure, got: ${JSON.stringify(historicalContextStage)}`);
+  }
+  if (result.historicalContext !== null) throw new Error("expected historicalContext to be null when the stage was never attempted");
+  for (const script of UNCONDITIONAL_IN_PROCESS_SCRIPTS) {
+    const stage = result.stages.find((s) => s.script === script);
+    if (stage.status !== "PASS") throw new Error(`expected ${script} to still run unconditionally even though Historical Context Retriever itself was skipped`);
+  }
+  ok("Historical Context Retriever is skipped (never invoked) when an earlier upfront stage already failed, unlike the truly unconditional Run History Manager/Engineering Memory");
+}
+
+// 25. Historical Context Retriever runs even after a failed validation (it runs upfront, long before the
+//     loop's own outcome is known) -- exactly once per whole run.
+{
+  const dir = makeFixture();
+  const mod = requireFixture(dir);
+  const calls = [];
+  const fakeHistoricalContextRetriever = { retrieveSync: (options) => (calls.push(options), { context: { query: "X", matchingRuns: [], confidence: 0 }, jsonPath: "", mdPath: "" }) };
+  const result = mod.runOrchestration({
+    spawnFn: makeFakeSpawn("validation-engine.js"),
+    cwd: dir,
+    historicalContextRetriever: fakeHistoricalContextRetriever,
+    readIterationOutcome: NEVER_APPROVE_NO_RETRY,
+  });
+  if (calls.length !== 1) throw new Error("expected Historical Context Retriever to still be invoked once even though validation later fails");
+  if (result.status !== "failed") throw new Error("expected the overall run to be reported as failed");
+  ok("Historical Context Retriever runs (exactly once) even when a later stage's validation is rejected, since it runs upfront");
 }
 
 console.log("All Autonomous Engineering Orchestrator v1 regression scenarios passed.");

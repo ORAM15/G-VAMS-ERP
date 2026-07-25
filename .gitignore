@@ -74,3 +74,7 @@ frontend/public/autonomous-engineer-data/
 # Engineering Memory Engine v1 generated output (regenerate with `node scripts/autonomous-orchestrator.js`,
 # or standalone via `node scripts/engineering-memory.js`)
 /memory/
+
+# Historical Context Retriever v1 generated output (regenerate with `node scripts/autonomous-orchestrator.js`,
+# or standalone via `node scripts/historical-context-retriever.js`)
+/historical-context/

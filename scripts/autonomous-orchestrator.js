@@ -46,9 +46,14 @@ const maxIterations = (() => {
   return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_MAX_ITERATIONS;
 })();
 
-const UPFRONT_STAGES = [
+// Split at the point Historical Context Retriever is inserted (see HISTORICAL_CONTEXT_STAGE below): the two
+// halves still stop-on-fail exactly like a single UPFRONT_STAGES array always has, but Historical Context
+// Retriever itself sits between them with its own non-blocking contract.
+const UPFRONT_STAGES_BEFORE_HISTORICAL_CONTEXT = [
   { name: "Repository Intelligence", script: "repository-intelligence.js" },
   { name: "Engineering Knowledge", script: "engineering-knowledge.js" },
+];
+const UPFRONT_STAGES_AFTER_HISTORICAL_CONTEXT = [
   { name: "Recommendation Engine", script: "recommendation-engine.js" },
   { name: "Decision Engine", script: "decision-engine.js" },
   { name: "Implementation Request Engine", script: "implementation-request-engine.js" },
@@ -84,10 +89,21 @@ const HISTORY_STAGE = { name: "Run History Manager", script: "run-history-manage
 // Run History Manager, is called in-process via require(), never spawned as a subprocess.
 const MEMORY_STAGE = { name: "Engineering Memory", script: "engineering-memory.js" };
 
+// Historical Context Retriever sits between Engineering Knowledge and Recommendation Engine -- its whole
+// purpose is to ground new recommendations in what has already been tried, so it must run BEFORE
+// Recommendation Engine, not after (unlike Run History Manager/Engineering Memory, which run once a whole
+// run is already complete). Its own failure policy is explicitly non-blocking ("log 'Historical Context
+// failed', continue execution") -- unlike a normal upfront stage, which would stop the whole run -- so, like
+// Run History Manager/Engineering Memory, it is called in-process via require() with its own dedicated
+// runHistoricalContextStage(), never spawned as a subprocess and never able to set `stopped`.
+const HISTORICAL_CONTEXT_STAGE = { name: "Historical Context Retriever", script: "historical-context-retriever.js" };
+
 // Flat view of every stage this orchestrator can run, in their natural single-pass order. Iteration 2+ of
 // the loop is captured separately in run.json's `iterations` field (see runOrchestration()) -- this flat
-// list always reflects the upfront stages plus the FINAL (decisive) loop attempt plus Run History Manager
-// plus Engineering Memory plus the publish stages.
+// list always reflects the upfront stages (with Historical Context Retriever between Engineering Knowledge
+// and Recommendation Engine) plus the FINAL (decisive) loop attempt plus Run History Manager plus
+// Engineering Memory plus the publish stages.
+const UPFRONT_STAGES = [...UPFRONT_STAGES_BEFORE_HISTORICAL_CONTEXT, HISTORICAL_CONTEXT_STAGE, ...UPFRONT_STAGES_AFTER_HISTORICAL_CONTEXT];
 const STAGES = [...UPFRONT_STAGES, ...LOOP_STAGES, HISTORY_STAGE, MEMORY_STAGE, ...FINAL_STAGES];
 
 // Every artifact any stage might produce, relative to the repository root. Existence-checked only -- this
@@ -98,6 +114,8 @@ const KNOWN_ARTIFACTS = [
   "repository-intelligence/repository-analysis.md",
   "engineering-knowledge/engineering-knowledge.json",
   "engineering-knowledge/engineering-knowledge.md",
+  "historical-context/historical-context.json",
+  "historical-context/historical-context.md",
   "recommendations/recommendations.json",
   "recommendations/recommendations.md",
   "decision/decision.json",
@@ -179,6 +197,43 @@ function runOne(stage, deps, iteration) {
   const result = runStage(stage, deps);
   if (deps && deps.onStageEvent) deps.onStageEvent({ phase: "end", stage, result, iteration });
   return result;
+}
+
+/**
+ * Runs Historical Context Retriever, in-process, between Engineering Knowledge and Recommendation Engine --
+ * grounding the recommendation about to be generated in what has already been tried. Never throws and never
+ * sets the orchestrator's `stopped` flag -- a failure is logged ("Historical Context failed") and the run
+ * continues exactly as if it had succeeded, per this engine's own explicit non-blocking contract (identical
+ * in shape to runHistoryStage()/runMemoryStage(), even though it runs much earlier in the pipeline).
+ * @param {{cwd?: string, historicalContextRetriever?: {retrieveSync: Function}, historicalContextRepositoryAnalysisPath?: string, historicalContextEngineeringMemoryPath?: string, historicalContextRunsDir?: string, historicalContextOutputDir?: string}} [deps]
+ *   deps.historicalContextRetriever lets tests inject a fake module without needing a real failure mode.
+ * @returns {{name: string, script: string, status: string, exitCode: null, startTime: string, endTime: string, durationMs: number, stdout: string, stderr: string, historicalContext: (object|null)}}
+ */
+function runHistoricalContextStage(deps) {
+  const startTime = new Date().toISOString();
+  const startedAt = Date.now();
+  let status = "PASS";
+  let stdout = "";
+  let stderr = "";
+  let historicalContext = null;
+  try {
+    const historicalContextRetriever = (deps && deps.historicalContextRetriever) || require("./historical-context-retriever");
+    const result = historicalContextRetriever.retrieveSync({
+      repositoryAnalysisPath: deps && deps.historicalContextRepositoryAnalysisPath,
+      engineeringMemoryPath: deps && deps.historicalContextEngineeringMemoryPath,
+      runsDir: deps && deps.historicalContextRunsDir,
+      outputDir: deps && deps.historicalContextOutputDir,
+    });
+    stdout = `Query "${result.context.query}" -- ${result.context.matchingRuns.length} matching run(s); wrote ${path.relative(root, result.jsonPath)}`;
+    historicalContext = { query: result.context.query, matchingRuns: result.context.matchingRuns.length, confidence: result.context.confidence, jsonPath: result.jsonPath };
+  } catch (error) {
+    status = "WARN";
+    stderr = `Historical Context failed: ${error.message}`;
+    console.error("Historical Context failed:", error.message);
+  }
+  const durationMs = Date.now() - startedAt;
+  const endTime = new Date().toISOString();
+  return { name: HISTORICAL_CONTEXT_STAGE.name, script: HISTORICAL_CONTEXT_STAGE.script, status, exitCode: null, startTime, endTime, durationMs, stdout, stderr, historicalContext };
 }
 
 /**
@@ -299,7 +354,33 @@ function runOrchestration(deps) {
   let stopped = false;
   let approved = false;
 
-  for (const stage of UPFRONT_STAGES) {
+  for (const stage of UPFRONT_STAGES_BEFORE_HISTORICAL_CONTEXT) {
+    if (stopped) {
+      stages.push(skipStage(stage, deps));
+      continue;
+    }
+    const result = runOne(stage, deps);
+    stages.push(result);
+    upfrontResults.push(result);
+    if (result.status !== "PASS") stopped = true;
+  }
+
+  // Historical Context Retriever: skipped like any other upfront stage if an earlier stage already stopped
+  // the run (its own input, repository-analysis.json, may not even be fresh at that point), but its own
+  // failure -- unlike a normal upfront stage's -- is logged and never stops the run itself (see
+  // runHistoricalContextStage()'s explicit non-blocking contract).
+  let historicalContextResult;
+  if (stopped) {
+    historicalContextResult = skipStage(HISTORICAL_CONTEXT_STAGE, deps);
+  } else {
+    if (deps && deps.onStageEvent) deps.onStageEvent({ phase: "start", stage: HISTORICAL_CONTEXT_STAGE });
+    historicalContextResult = runHistoricalContextStage(deps);
+    if (deps && deps.onStageEvent) deps.onStageEvent({ phase: "end", stage: HISTORICAL_CONTEXT_STAGE, result: historicalContextResult });
+  }
+  stages.push(historicalContextResult);
+  upfrontResults.push(historicalContextResult);
+
+  for (const stage of UPFRONT_STAGES_AFTER_HISTORICAL_CONTEXT) {
     if (stopped) {
       stages.push(skipStage(stage, deps));
       continue;
@@ -399,6 +480,7 @@ function runOrchestration(deps) {
     iterations,
     maxIterations: maxIter,
     iterationsUsed,
+    historicalContext: historicalContextResult.historicalContext ?? null,
     runHistory: historyResult.runHistory,
     engineeringMemory: memoryResult.engineeringMemory,
   };
@@ -442,6 +524,7 @@ function buildRunRecord(orchestrationResult, baseDir) {
     maxIterations: orchestrationResult.maxIterations,
     iterationsUsed: orchestrationResult.iterationsUsed,
     iterations: orchestrationResult.iterations,
+    historicalContext: orchestrationResult.historicalContext,
     runHistory: orchestrationResult.runHistory,
     engineeringMemory: orchestrationResult.engineeringMemory,
     artifactsProduced: findArtifactsProduced(baseDir),
@@ -505,6 +588,14 @@ function renderMarkdown(run) {
       lines.push("```", failed.stderr, "```", "");
     }
   }
+
+  lines.push("## Historical Context", "");
+  lines.push(
+    run.historicalContext
+      ? `Query "${run.historicalContext.query}" -- ${run.historicalContext.matchingRuns} matching run(s) (confidence ${run.historicalContext.confidence}).`
+      : "Historical Context failed; no context was retrieved for this run.",
+    ""
+  );
 
   lines.push("## Run History", "");
   lines.push(
@@ -594,15 +685,19 @@ module.exports = {
   maxIterations,
   DEFAULT_MAX_ITERATIONS,
   UPFRONT_STAGES,
+  UPFRONT_STAGES_BEFORE_HISTORICAL_CONTEXT,
+  UPFRONT_STAGES_AFTER_HISTORICAL_CONTEXT,
   LOOP_STAGES,
   HISTORY_STAGE,
   MEMORY_STAGE,
+  HISTORICAL_CONTEXT_STAGE,
   FINAL_STAGES,
   STAGES,
   KNOWN_ARTIFACTS,
   runStage,
   runHistoryStage,
   runMemoryStage,
+  runHistoricalContextStage,
   runOrchestration,
   defaultReadIterationOutcome,
   findArtifactsProduced,

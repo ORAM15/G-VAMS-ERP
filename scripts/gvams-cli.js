@@ -25,7 +25,7 @@ const COMMANDS = {
   analyze: { scripts: ["repository-intelligence.js"], description: "Run Repository Intelligence." },
   knowledge: { scripts: ["engineering-knowledge.js"], description: "Run Engineering Knowledge Engine." },
   recommend: { scripts: ["recommendation-engine.js"], description: "Run Recommendation Engine." },
-  decide: { scripts: ["decision-engine.js"], description: "Run Decision Engine." },
+  decide: { scripts: ["adaptive-decision-engine.js"], description: "Run Adaptive Decision Engine v2." },
   implement: { scripts: ["implementation-request-engine.js", "implementation-executor.js"], description: "Generate an implementation request, then execute it." },
   validate: { scripts: ["validation-engine.js"], description: "Run Validation Engine." },
   pr: { scripts: ["pull-request-generator.js"], description: "Run Pull Request Generator." },

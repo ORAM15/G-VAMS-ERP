@@ -53,9 +53,15 @@ const UPFRONT_STAGES_BEFORE_HISTORICAL_CONTEXT = [
   { name: "Repository Intelligence", script: "repository-intelligence.js" },
   { name: "Engineering Knowledge", script: "engineering-knowledge.js" },
 ];
+// Decision Engine v1 has been replaced by Adaptive Decision Engine v2 (scripts/adaptive-decision-engine.js)
+// in this pipeline slot -- it still writes decision/decision.json in Decision Engine v1's own exact shape
+// (see adaptive-decision-engine.js's buildCompatDecision()), so Implementation Request Engine and every
+// other surrounding stage need no changes at all. scripts/decision-engine.js itself is untouched and still
+// runs standalone (`node scripts/decision-engine.js`, and several other engines' own end-to-end test
+// fixtures still spawn it directly) -- only this orchestrator's own stage slot was swapped.
 const UPFRONT_STAGES_AFTER_HISTORICAL_CONTEXT = [
   { name: "Recommendation Engine", script: "recommendation-engine.js" },
-  { name: "Decision Engine", script: "decision-engine.js" },
+  { name: "Adaptive Decision Engine", script: "adaptive-decision-engine.js" },
   { name: "Implementation Request Engine", script: "implementation-request-engine.js" },
 ];
 
@@ -120,6 +126,8 @@ const KNOWN_ARTIFACTS = [
   "recommendations/recommendations.md",
   "decision/decision.json",
   "decision/decision.md",
+  "decision/adaptive-decision.json",
+  "decision/adaptive-decision.md",
   "implementation-request/implementation-request.json",
   "implementation-request/implementation-request.md",
   "execution/execution.json",

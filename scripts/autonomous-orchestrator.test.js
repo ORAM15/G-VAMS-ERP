@@ -27,7 +27,7 @@ const ENGINE_SCRIPTS = [
   "repository-intelligence.js",
   "engineering-knowledge.js",
   "recommendation-engine.js",
-  "decision-engine.js",
+  "adaptive-decision-engine.js",
   "implementation-request-engine.js",
   "implementation-executor.js",
   "validation-engine.js",
@@ -105,10 +105,10 @@ function ok(name) {
 {
   const dir = makeFixture();
   const mod = requireFixture(dir);
-  const result = mod.runOrchestration({ spawnFn: makeFakeSpawn("decision-engine.js"), cwd: dir });
+  const result = mod.runOrchestration({ spawnFn: makeFakeSpawn("adaptive-decision-engine.js"), cwd: dir });
   if (result.status !== "failed") throw new Error(`expected overall status "failed", got: ${result.status}`);
-  const failedIndex = mod.STAGES.findIndex((s) => s.script === "decision-engine.js");
-  if (result.stages[failedIndex].status !== "FAIL") throw new Error(`expected Decision Engine to FAIL, got: ${result.stages[failedIndex].status}`);
+  const failedIndex = mod.STAGES.findIndex((s) => s.script === "adaptive-decision-engine.js");
+  if (result.stages[failedIndex].status !== "FAIL") throw new Error(`expected Adaptive Decision Engine to FAIL, got: ${result.stages[failedIndex].status}`);
   if (result.stages.slice(0, failedIndex).some((s) => s.status !== "PASS")) throw new Error("expected every stage before the failure to PASS");
   ok("an upfront-stage failure is correctly recorded, and overall status becomes \"failed\"");
 }
@@ -321,7 +321,7 @@ function ok(name) {
   fs.writeFileSync(path.join(cliDir, "scripts/engineering-memory.js"), engineeringMemorySource);
   fs.writeFileSync(path.join(cliDir, "scripts/historical-context-retriever.js"), historicalContextRetrieverSource);
   for (const script of ENGINE_SCRIPTS) {
-    const shouldFail = script === "decision-engine.js";
+    const shouldFail = script === "adaptive-decision-engine.js";
     writeFile(
       path.join(cliDir, "scripts", script),
       shouldFail ? 'console.error("simulated fake-stage failure"); process.exit(1);\n' : `console.log("fake stage ok: ${script}"); process.exit(0);\n`
@@ -329,17 +329,17 @@ function ok(name) {
   }
   const failingRun = spawnSync("node", ["scripts/autonomous-orchestrator.js"], { cwd: cliDir, encoding: "utf8" });
   if (failingRun.status !== 1) throw new Error(`expected the CLI to exit 1 when an upfront stage fails, got exit ${failingRun.status}:\n${failingRun.stdout}\n${failingRun.stderr}`);
-  if (!failingRun.stdout.includes("Decision Engine... FAIL")) throw new Error(`expected clean console progress to show the failing stage, got:\n${failingRun.stdout}`);
+  if (!failingRun.stdout.includes("Adaptive Decision Engine... FAIL")) throw new Error(`expected clean console progress to show the failing stage, got:\n${failingRun.stdout}`);
   if (!failingRun.stdout.includes("Pull Request Generator... SKIPPED")) throw new Error(`expected clean console progress to show skipped stages, got:\n${failingRun.stdout}`);
   const failedRunJson = JSON.parse(fs.readFileSync(path.join(cliDir, "run/run.json"), "utf8"));
   if (failedRunJson.status !== "failed") throw new Error(`expected run.json status "failed", got: ${failedRunJson.status}`);
   for (const script of IN_PROCESS_SCRIPTS) {
     const stage = failedRunJson.stages.find((s) => s.script === script);
-    if (!stage || stage.status !== "PASS") throw new Error(`expected ${script} to still have PASSed (either unconditionally, or by already having run before decision-engine.js's later failure)`);
+    if (!stage || stage.status !== "PASS") throw new Error(`expected ${script} to still have PASSed (either unconditionally, or by already having run before adaptive-decision-engine.js's later failure)`);
   }
   if (!fs.existsSync(path.join(cliDir, "runs", "RUN-000001"))) throw new Error("expected a runs/RUN-000001 archive to be created even for a failed run");
   if (!fs.existsSync(path.join(cliDir, "memory", "engineering-memory.json"))) throw new Error("expected memory/engineering-memory.json to be created even for a failed run");
-  if (!fs.existsSync(path.join(cliDir, "historical-context", "historical-context.json"))) throw new Error("expected historical-context/historical-context.json to be created (it ran before the later decision-engine.js failure)");
+  if (!fs.existsSync(path.join(cliDir, "historical-context", "historical-context.json"))) throw new Error("expected historical-context/historical-context.json to be created (it ran before the later adaptive-decision-engine.js failure)");
 
   for (const script of ENGINE_SCRIPTS) {
     writeFile(path.join(cliDir, "scripts", script), `console.log("fake stage ok: ${script}"); process.exit(0);\n`);
@@ -379,7 +379,7 @@ function ok(name) {
     "scripts/engineering-knowledge.js",
     "scripts/historical-context-retriever.js",
     "scripts/recommendation-engine.js",
-    "scripts/decision-engine.js",
+    "scripts/adaptive-decision-engine.js",
     "scripts/implementation-request-engine.js",
     "scripts/implementation-executor.js",
     "scripts/validation-engine.js",
@@ -408,6 +408,11 @@ function ok(name) {
   if (!memoryStage || memoryStage.status !== "PASS") throw new Error(`expected Engineering Memory to genuinely succeed in the real end-to-end chain, got: ${JSON.stringify(memoryStage)}`);
   const historicalContextStage = runRecord.stages.find((s) => s.script === "historical-context-retriever.js");
   if (!historicalContextStage || historicalContextStage.status !== "PASS") throw new Error(`expected Historical Context Retriever to genuinely succeed in the real end-to-end chain, got: ${JSON.stringify(historicalContextStage)}`);
+  const adaptiveDecisionStage = runRecord.stages.find((s) => s.script === "adaptive-decision-engine.js");
+  if (!adaptiveDecisionStage || adaptiveDecisionStage.status !== "PASS") throw new Error(`expected Adaptive Decision Engine to genuinely succeed in the real end-to-end chain, got: ${JSON.stringify(adaptiveDecisionStage)}`);
+  if (!fs.existsSync(path.join(dir, "decision", "adaptive-decision.json")) || !fs.existsSync(path.join(dir, "decision", "decision.json"))) {
+    throw new Error("expected Adaptive Decision Engine to produce both decision/adaptive-decision.json and the backward-compatible decision/decision.json");
+  }
   const historicalContextIndex = runRecord.stages.findIndex((s) => s.script === "historical-context-retriever.js");
   const recommendationIndex = runRecord.stages.findIndex((s) => s.script === "recommendation-engine.js");
   if (historicalContextIndex === -1 || recommendationIndex === -1 || historicalContextIndex >= recommendationIndex) {
@@ -429,6 +434,7 @@ function ok(name) {
     if (!runRecord.artifactsProduced.includes("reflection/reflection-report.json")) throw new Error("expected reflection/reflection-report.json to be listed as a produced artifact");
     if (!runRecord.artifactsProduced.includes("memory/engineering-memory.json")) throw new Error("expected memory/engineering-memory.json to be listed as a produced artifact");
     if (!runRecord.artifactsProduced.includes("historical-context/historical-context.json")) throw new Error("expected historical-context/historical-context.json to be listed as a produced artifact");
+    if (!runRecord.artifactsProduced.includes("decision/adaptive-decision.json")) throw new Error("expected decision/adaptive-decision.json to be listed as a produced artifact");
     if (runRecord.runHistory.archivedFiles.length === 0) throw new Error("expected the real successful run to have archived at least one real artifact");
   } else {
     if (runRecord.status !== "failed") throw new Error(`expected run.json status "failed" to match a non-zero CLI exit code, got: ${runRecord.status}`);

@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // Autonomous Engineering Orchestrator v1 regression coverage: the pure orchestration logic (runOrchestration,
-// findArtifactsProduced, buildRunRecord, renderMarkdown) is exercised with an injected fake spawn function
-// (fast, deterministic, no real engines needed), the CLI is exercised against real subprocesses using tiny
-// fake stage scripts (controllable exit codes, mirroring the fake-"claude"/fake-"gh" technique used
-// elsewhere in this pipeline), and one true end-to-end run drives the real nine-stage chain.
+// findArtifactsProduced, buildRunRecord, renderMarkdown), including the Implementation Executor/Validation
+// Engine/Reflection Engine iteration loop, is exercised with an injected fake spawn function and a scripted
+// readIterationOutcome (fast, deterministic, no real engines needed and never touching this actual
+// repository's own artifacts). The CLI is exercised against real subprocesses using tiny fake stage scripts
+// (controllable exit codes, mirroring the fake-"claude"/fake-"gh" technique used elsewhere in this
+// pipeline), and one true end-to-end run drives the real ten-stage chain.
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -20,6 +22,7 @@ const ENGINE_SCRIPTS = [
   "implementation-request-engine.js",
   "implementation-executor.js",
   "validation-engine.js",
+  "reflection-engine.js",
   "pull-request-generator.js",
   "github-publisher.js",
 ];
@@ -51,51 +54,145 @@ function makeFakeSpawn(failOnScript, callLog) {
   };
 }
 
+// Returns a stateful readIterationOutcome function that yields each entry of `outcomes` in turn (repeating
+// the last entry if called more times than there are entries).
+function makeScriptedOutcome(outcomes) {
+  let index = 0;
+  return () => {
+    const outcome = outcomes[Math.min(index, outcomes.length - 1)];
+    index += 1;
+    return outcome;
+  };
+}
+
+const NEVER_APPROVE_NO_RETRY = () => ({ approvedForPR: false, retryRecommended: false });
+
 function ok(name) {
   console.log(`${name}: observed expected deterministic outcome`);
 }
 
-// 1. Stage failure: a mid-pipeline stage fails -- it is recorded FAIL, every stage before it PASSes, and
-//    overall orchestration status is "failed".
+// 1. Stage failure (upfront stage): a failure before the implementation loop is recorded FAIL, every stage
+//    before it PASSes, and overall orchestration status is "failed".
 {
   const dir = makeFixture();
   const mod = requireFixture(dir);
-  const result = mod.runOrchestration({ spawnFn: makeFakeSpawn("decision-engine.js") });
+  const result = mod.runOrchestration({ spawnFn: makeFakeSpawn("decision-engine.js"), cwd: dir });
   if (result.status !== "failed") throw new Error(`expected overall status "failed", got: ${result.status}`);
   const failedIndex = mod.STAGES.findIndex((s) => s.script === "decision-engine.js");
   if (result.stages[failedIndex].status !== "FAIL") throw new Error(`expected Decision Engine to FAIL, got: ${result.stages[failedIndex].status}`);
   if (result.stages.slice(0, failedIndex).some((s) => s.status !== "PASS")) throw new Error("expected every stage before the failure to PASS");
-  ok("a mid-pipeline stage failure is correctly recorded, and overall status becomes \"failed\"");
+  ok("an upfront-stage failure is correctly recorded, and overall status becomes \"failed\"");
 }
 
-// 2. Skipped stages: every stage after the failure is recorded SKIPPED, never attempted (no exit code, no
-//    timing).
+// 2. Skipped stages (upfront failure): every stage after an upfront failure -- including the entire
+//    Implementation Executor/Validation Engine/Reflection Engine loop -- is recorded SKIPPED, never
+//    attempted (no exit code, no timing). Upfront stages are deterministic pure functions of already-fixed
+//    state, so there is nothing for the loop to meaningfully evaluate once one of them has failed.
 {
   const dir = makeFixture();
   const mod = requireFixture(dir);
-  const result = mod.runOrchestration({ spawnFn: makeFakeSpawn("implementation-executor.js") });
-  const failedIndex = mod.STAGES.findIndex((s) => s.script === "implementation-executor.js");
+  const result = mod.runOrchestration({ spawnFn: makeFakeSpawn("recommendation-engine.js"), cwd: dir });
+  const failedIndex = mod.STAGES.findIndex((s) => s.script === "recommendation-engine.js");
   const remaining = result.stages.slice(failedIndex + 1);
   if (remaining.length === 0) throw new Error("expected at least one stage after the failure to verify SKIPPED behavior");
   if (remaining.some((s) => s.status !== "SKIPPED" || s.exitCode !== null || s.startTime !== null || s.durationMs !== null)) {
     throw new Error(`expected every remaining stage to be cleanly SKIPPED (no exit code, no timing), got: ${JSON.stringify(remaining)}`);
   }
-  ok("every stage after a failure is recorded SKIPPED with no exit code or timing, never attempted");
+  if (result.iterationsUsed !== 0) throw new Error(`expected 0 loop iterations to be attempted after an upfront failure, got: ${result.iterationsUsed}`);
+  ok("every stage after an upfront failure is recorded SKIPPED with no exit code or timing, and the loop is never entered");
 }
 
-// 3. Successful execution: every stage passes, and overall status is "success".
+// 3. A loop-stage failure (Implementation Executor itself exits non-zero, e.g. "blocked") does NOT skip
+//    Validation Engine or Reflection Engine -- they still run, exactly as the real pipeline requires, since
+//    Validation Engine's whole job is interpreting whatever Implementation Executor produced. Only the
+//    publish stages are skipped once the loop concludes without an approval.
+{
+  const dir = makeFixture();
+  const mod = requireFixture(dir);
+  const result = mod.runOrchestration({ spawnFn: makeFakeSpawn("implementation-executor.js"), cwd: dir, readIterationOutcome: NEVER_APPROVE_NO_RETRY });
+  const ie = result.stages.find((s) => s.script === "implementation-executor.js");
+  const ve = result.stages.find((s) => s.script === "validation-engine.js");
+  const refl = result.stages.find((s) => s.script === "reflection-engine.js");
+  const prg = result.stages.find((s) => s.script === "pull-request-generator.js");
+  if (ie.status !== "FAIL") throw new Error(`expected Implementation Executor to FAIL, got: ${ie.status}`);
+  if (ve.status !== "PASS" || refl.status !== "PASS") throw new Error(`expected Validation Engine and Reflection Engine to still run after an Implementation Executor failure, got: ${ve.status}/${refl.status}`);
+  if (prg.status !== "SKIPPED") throw new Error("expected Pull Request Generator to be SKIPPED when the loop never reaches approval");
+  if (result.status !== "failed") throw new Error(`expected overall status "failed", got: ${result.status}`);
+  ok("an Implementation Executor failure still lets Validation Engine and Reflection Engine run, and only the publish stages are skipped");
+}
+
+// 4. Successful execution: every stage passes and the (simulated) validation is approved on the first
+//    iteration, so overall status is "success" and the publish stages run.
 {
   const dir = makeFixture();
   const mod = requireFixture(dir);
   const callLog = [];
-  const result = mod.runOrchestration({ spawnFn: makeFakeSpawn(null, callLog) });
+  const result = mod.runOrchestration({ spawnFn: makeFakeSpawn(null, callLog), cwd: dir, readIterationOutcome: () => ({ approvedForPR: true, retryRecommended: false }) });
   if (result.status !== "success") throw new Error(`expected overall status "success", got: ${result.status}`);
   if (result.stages.some((s) => s.status !== "PASS")) throw new Error("expected every stage to PASS");
+  if (result.iterationsUsed !== 1) throw new Error(`expected exactly 1 iteration when approved on the first attempt, got: ${result.iterationsUsed}`);
   if (callLog.length !== mod.STAGES.length) throw new Error(`expected exactly ${mod.STAGES.length} stage invocations, got: ${callLog.length}`);
-  ok("a fully successful run passes every stage and reports overall status \"success\"");
+  ok("a fully successful run passes every stage, uses exactly 1 iteration, and reports overall status \"success\"");
 }
 
-// 4. Missing artifacts: findArtifactsProduced() against an empty directory correctly reports nothing
+// 5. Iteration loop: a rejection with a recommended retry causes a second iteration to run; once that second
+//    iteration is approved, the loop stops and Pull Request Generator/GitHub Publisher Adapter each run
+//    EXACTLY once (never once per iteration).
+{
+  const dir = makeFixture();
+  const mod = requireFixture(dir);
+  const callLog = [];
+  const outcome = makeScriptedOutcome([
+    { approvedForPR: false, retryRecommended: true },
+    { approvedForPR: true, retryRecommended: false },
+  ]);
+  const result = mod.runOrchestration({ spawnFn: makeFakeSpawn(null, callLog), cwd: dir, maxIterations: 3, readIterationOutcome: outcome });
+  if (result.status !== "success") throw new Error(`expected overall status "success" once approved on the second iteration, got: ${result.status}`);
+  if (result.iterationsUsed !== 2) throw new Error(`expected exactly 2 iterations to be used, got: ${result.iterationsUsed}`);
+  if (result.iterations.length !== 2) throw new Error(`expected 2 recorded iterations, got: ${result.iterations.length}`);
+  const prgCount = callLog.filter((script) => script === "pull-request-generator.js").length;
+  const gpaCount = callLog.filter((script) => script === "github-publisher.js").length;
+  if (prgCount !== 1 || gpaCount !== 1) throw new Error(`expected Pull Request Generator/GitHub Publisher Adapter to run exactly once each, got ${prgCount}/${gpaCount} invocations`);
+  const ieCount = callLog.filter((script) => script === "implementation-executor.js").length;
+  if (ieCount !== 2) throw new Error(`expected Implementation Executor to run once per iteration (2 total), got ${ieCount}`);
+  ok("a recommended retry runs a second iteration, and once approved the publish stages run exactly once, never once per iteration");
+}
+
+// 6. Configurable maximum iterations: when a retry is recommended every time but approval never happens, the
+//    loop stops exactly at the configured maximum, and the publish stages are skipped.
+{
+  const dir = makeFixture();
+  const mod = requireFixture(dir);
+  const result = mod.runOrchestration({ spawnFn: makeFakeSpawn(null), cwd: dir, maxIterations: 2, readIterationOutcome: () => ({ approvedForPR: false, retryRecommended: true }) });
+  if (result.iterationsUsed !== 2) throw new Error(`expected exactly the configured maximum (2) iterations to be used, got: ${result.iterationsUsed}`);
+  if (result.status !== "failed") throw new Error(`expected overall status "failed" when the maximum iterations are exhausted without approval, got: ${result.status}`);
+  const prg = result.stages.find((s) => s.script === "pull-request-generator.js");
+  if (prg.status !== "SKIPPED") throw new Error("expected Pull Request Generator to be SKIPPED when the maximum iterations are exhausted without approval");
+  ok("the loop stops exactly at the configured maximum iteration count when approval never happens, and skips the publish stages");
+}
+
+// 7. No retry recommended: the loop stops after exactly 1 iteration even when more are allowed, since
+//    Reflection Engine's own recommendation -- not the iteration budget -- controls continuation.
+{
+  const dir = makeFixture();
+  const mod = requireFixture(dir);
+  const result = mod.runOrchestration({ spawnFn: makeFakeSpawn(null), cwd: dir, maxIterations: 5, readIterationOutcome: NEVER_APPROVE_NO_RETRY });
+  if (result.iterationsUsed !== 1) throw new Error(`expected exactly 1 iteration when no retry is recommended, regardless of the configured maximum, got: ${result.iterationsUsed}`);
+  ok("when Reflection Engine recommends no retry, the loop stops after 1 iteration regardless of how many more are allowed");
+}
+
+// 8. Infrastructure failure inside the loop: if Reflection Engine itself fails to run (distinct from a
+//    normal "rejected" business outcome), the loop stops immediately rather than guessing whether to retry.
+{
+  const dir = makeFixture();
+  const mod = requireFixture(dir);
+  const result = mod.runOrchestration({ spawnFn: makeFakeSpawn("reflection-engine.js"), cwd: dir, maxIterations: 3 });
+  if (result.iterationsUsed !== 1) throw new Error(`expected the loop to stop after 1 iteration when Reflection Engine itself fails to run, got: ${result.iterationsUsed}`);
+  if (result.status !== "failed") throw new Error("expected overall status \"failed\" when Reflection Engine fails to run");
+  ok("Reflection Engine itself failing to run is treated as an infrastructure failure and stops the loop immediately, never guessing a retry");
+}
+
+// 9. Missing artifacts: findArtifactsProduced() against an empty directory correctly reports nothing
 //    produced.
 {
   const dir = makeFixture();
@@ -106,25 +203,26 @@ function ok(name) {
   ok("findArtifactsProduced reports nothing produced when no known artifact files exist");
 }
 
-// 5. Malformed artifacts: an artifact file that exists but contains invalid JSON is still correctly reported
-//    as produced (existence-only check, never parsed) -- proving a leftover malformed file can never crash
-//    this orchestrator.
+// 10. Malformed artifacts: an artifact file (including Reflection Engine's own report) that exists but
+//     contains invalid JSON is still correctly reported as produced (existence-only check, never parsed).
 {
   const dir = makeFixture();
   const mod = requireFixture(dir);
   const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "autonomous-orchestrator-malformed-"));
   writeFile(path.join(fixtureDir, "decision", "decision.json"), "{ this is not valid JSON at all !!");
+  writeFile(path.join(fixtureDir, "reflection", "reflection-report.json"), "{ also not valid JSON");
   const artifacts = mod.findArtifactsProduced(fixtureDir);
   if (!artifacts.includes("decision/decision.json")) throw new Error("expected a malformed-but-present artifact to still be reported as produced");
-  ok("a malformed artifact file is still correctly reported as produced (existence-only, never parsed)");
+  if (!artifacts.includes("reflection/reflection-report.json")) throw new Error("expected a malformed-but-present reflection-report.json to still be reported as produced");
+  ok("a malformed artifact file (including a reflection report) is still correctly reported as produced (existence-only, never parsed)");
 }
 
-// 6. Duration: every ran stage has a non-negative, finite durationMs; every skipped stage has durationMs
-//    null; the overall run's finishTime is not before its startTime.
+// 11. Duration: every ran stage has a non-negative, finite durationMs; every skipped stage has durationMs
+//     null; the overall run's finishTime is not before its startTime.
 {
   const dir = makeFixture();
   const mod = requireFixture(dir);
-  const result = mod.runOrchestration({ spawnFn: makeFakeSpawn("recommendation-engine.js") });
+  const result = mod.runOrchestration({ spawnFn: makeFakeSpawn("recommendation-engine.js"), cwd: dir });
   for (const stage of result.stages) {
     if (stage.status === "SKIPPED") {
       if (stage.durationMs !== null) throw new Error("expected a SKIPPED stage's durationMs to be null");
@@ -137,32 +235,39 @@ function ok(name) {
   ok("duration is correctly tracked per stage (null when skipped) and for the overall run, with finishTime never before startTime");
 }
 
-// 7. Report generation: renderMarkdown includes every required section, the full stage table, and a
-//    Failure Detail section only when a stage actually failed.
+// 12. Report generation: renderMarkdown includes every required section (including the new Iterations
+//     section and its per-iteration table when more than one iteration ran), and a Failure Detail section
+//     only when a stage actually failed.
 {
   const dir = makeFixture();
   const mod = requireFixture(dir);
-  const failedResult = mod.runOrchestration({ spawnFn: makeFakeSpawn("validation-engine.js") });
+  const failedResult = mod.runOrchestration({ spawnFn: makeFakeSpawn("validation-engine.js"), cwd: dir, readIterationOutcome: NEVER_APPROVE_NO_RETRY });
   const failedRun = mod.buildRunRecord(failedResult, dir);
   const failedMarkdown = mod.renderMarkdown(failedRun);
-  for (const heading of ["# Autonomous Engineering Orchestrator Report", "## Status", "## Timing", "## Stages", "## Failure Detail", "## Artifacts Produced", "## Next Step"]) {
+  for (const heading of ["# Autonomous Engineering Orchestrator Report", "## Status", "## Timing", "## Stages", "## Iterations", "## Failure Detail", "## Artifacts Produced", "## Next Step"]) {
     if (!failedMarkdown.includes(heading)) throw new Error(`expected markdown to include "${heading}" for a failed run`);
   }
-  for (const stage of failedRun.stages) {
-    if (!failedMarkdown.includes(stage.name)) throw new Error(`expected the stages table to include ${stage.name}`);
-  }
 
-  const successResult = mod.runOrchestration({ spawnFn: makeFakeSpawn(null) });
-  const successRun = mod.buildRunRecord(successResult, dir);
-  const successMarkdown = mod.renderMarkdown(successRun);
+  const multiIterationResult = mod.runOrchestration({
+    spawnFn: makeFakeSpawn(null),
+    cwd: dir,
+    maxIterations: 2,
+    readIterationOutcome: makeScriptedOutcome([{ approvedForPR: false, retryRecommended: true }, { approvedForPR: true, retryRecommended: false }]),
+  });
+  const multiIterationMarkdown = mod.renderMarkdown(mod.buildRunRecord(multiIterationResult, dir));
+  if (!/\| 2 \|/.test(multiIterationMarkdown)) throw new Error("expected the iterations table to include a row for iteration 2");
+
+  const successResult = mod.runOrchestration({ spawnFn: makeFakeSpawn(null), cwd: dir, readIterationOutcome: () => ({ approvedForPR: true, retryRecommended: false }) });
+  const successMarkdown = mod.renderMarkdown(mod.buildRunRecord(successResult, dir));
   if (successMarkdown.includes("## Failure Detail")) throw new Error("expected no Failure Detail section for a fully successful run");
 
-  ok("renderMarkdown includes every required section, the full stage table, and a conditional Failure Detail section");
+  ok("renderMarkdown includes every required section (including Iterations), the full stage table, and a conditional Failure Detail section");
 }
 
-// 8. CLI + exit codes: a real subprocess run against tiny fake stage scripts (controllable exit codes)
-//    proves the real CLI stops immediately on failure (exit 1) and succeeds (exit 0) when every stage
-//    passes.
+// 13. CLI + exit codes: a real subprocess run against tiny fake stage scripts (controllable exit codes)
+//     proves the real CLI stops immediately on an upfront failure (exit 1) and succeeds (exit 0) when every
+//     stage passes -- including a fake Validation Engine that writes a real approvedForPR:true so the real
+//     orchestrator's own file-based readIterationOutcome() correctly reads it.
 {
   const cliDir = fs.mkdtempSync(path.join(os.tmpdir(), "autonomous-orchestrator-cli-"));
   fs.mkdirSync(path.join(cliDir, "scripts"), { recursive: true });
@@ -175,7 +280,7 @@ function ok(name) {
     );
   }
   const failingRun = spawnSync("node", ["scripts/autonomous-orchestrator.js"], { cwd: cliDir, encoding: "utf8" });
-  if (failingRun.status !== 1) throw new Error(`expected the CLI to exit 1 when a stage fails, got exit ${failingRun.status}:\n${failingRun.stdout}\n${failingRun.stderr}`);
+  if (failingRun.status !== 1) throw new Error(`expected the CLI to exit 1 when an upfront stage fails, got exit ${failingRun.status}:\n${failingRun.stdout}\n${failingRun.stderr}`);
   if (!failingRun.stdout.includes("Decision Engine... FAIL")) throw new Error(`expected clean console progress to show the failing stage, got:\n${failingRun.stdout}`);
   if (!failingRun.stdout.includes("Pull Request Generator... SKIPPED")) throw new Error(`expected clean console progress to show skipped stages, got:\n${failingRun.stdout}`);
   const failedRunJson = JSON.parse(fs.readFileSync(path.join(cliDir, "run/run.json"), "utf8"));
@@ -184,16 +289,29 @@ function ok(name) {
   for (const script of ENGINE_SCRIPTS) {
     writeFile(path.join(cliDir, "scripts", script), `console.log("fake stage ok: ${script}"); process.exit(0);\n`);
   }
+  writeFile(
+    path.join(cliDir, "scripts/validation-engine.js"),
+    `
+      const fs = require("fs");
+      const path = require("path");
+      fs.mkdirSync(path.join(process.cwd(), "validation"), { recursive: true });
+      fs.writeFileSync(path.join(process.cwd(), "validation", "validation.json"), JSON.stringify({ approvedForPR: true, status: "approved" }));
+      console.log("fake validation-engine ok");
+      process.exit(0);
+    `
+  );
   const successRun = spawnSync("node", ["scripts/autonomous-orchestrator.js"], { cwd: cliDir, encoding: "utf8" });
-  if (successRun.status !== 0) throw new Error(`expected the CLI to exit 0 when every stage passes, got exit ${successRun.status}:\n${successRun.stdout}\n${successRun.stderr}`);
+  if (successRun.status !== 0) throw new Error(`expected the CLI to exit 0 when every stage passes and validation is approved, got exit ${successRun.status}:\n${successRun.stdout}\n${successRun.stderr}`);
   const successRunJson = JSON.parse(fs.readFileSync(path.join(cliDir, "run/run.json"), "utf8"));
   if (successRunJson.status !== "success" || successRunJson.stages.some((s) => s.status !== "PASS")) throw new Error(`expected a fully passing run.json, got: ${JSON.stringify(successRunJson)}`);
+  if (successRunJson.iterationsUsed !== 1) throw new Error(`expected exactly 1 iteration to be used, got: ${successRunJson.iterationsUsed}`);
 
-  ok("the real CLI, run against real (fake) stage subprocesses, exits 1 and stops immediately on failure, and exits 0 when every stage passes");
+  ok("the real CLI, run against real (fake) stage subprocesses, exits 1 and stops immediately on an upfront failure, and exits 0 when every stage passes and validation is approved");
 }
 
-// 9. End-to-end execution: the real nine-stage chain, driven entirely by the real orchestrator CLI using
-//    the real engine sources, produces a valid, internally-consistent run.json/run.md.
+// 14. End-to-end execution: the real ten-stage chain, driven entirely by the real orchestrator CLI using the
+//     real engine sources (including the real Reflection Engine), produces a valid, internally-consistent
+//     run.json/run.md.
 {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "autonomous-orchestrator-e2e-"));
   fs.mkdirSync(path.join(dir, "scripts"), { recursive: true });
@@ -207,6 +325,7 @@ function ok(name) {
     "scripts/implementation-request-engine.js",
     "scripts/implementation-executor.js",
     "scripts/validation-engine.js",
+    "scripts/reflection-engine.js",
     "scripts/pull-request-generator.js",
     "scripts/github-publisher.js",
     "publisher/github/client.js",
@@ -221,15 +340,17 @@ function ok(name) {
   if (!fs.existsSync(jsonPath) || !fs.existsSync(mdPath)) throw new Error(`expected run.json and run.md to be produced by the real end-to-end chain:\n${run.stdout}\n${run.stderr}`);
 
   const runRecord = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
-  if (runRecord.stages.length !== 9) throw new Error(`expected all 9 real stages to be recorded, got: ${runRecord.stages.length}`);
+  if (runRecord.stages.length !== 10) throw new Error(`expected all 10 real stages to be recorded, got: ${runRecord.stages.length}`);
+  if (!runRecord.stages.some((s) => s.script === "reflection-engine.js")) throw new Error("expected Reflection Engine to be recorded among the real stages");
   if (run.status === 0) {
     if (runRecord.status !== "success" || runRecord.stages.some((s) => s.status !== "PASS")) throw new Error(`expected a fully passing real run.json, got: ${JSON.stringify(runRecord.stages)}`);
     if (!runRecord.artifactsProduced.includes("publish/publish.json")) throw new Error("expected publish/publish.json to be listed as a produced artifact for a fully successful real run");
+    if (!runRecord.artifactsProduced.includes("reflection/reflection-report.json")) throw new Error("expected reflection/reflection-report.json to be listed as a produced artifact");
   } else {
     if (runRecord.status !== "failed") throw new Error(`expected run.json status "failed" to match a non-zero CLI exit code, got: ${runRecord.status}`);
   }
 
-  ok("the real nine-stage chain, driven by the real orchestrator CLI, produces a valid and internally-consistent run.json/run.md end to end");
+  ok("the real ten-stage chain, driven by the real orchestrator CLI (including the real Reflection Engine), produces a valid and internally-consistent run.json/run.md end to end");
 }
 
 console.log("All Autonomous Engineering Orchestrator v1 regression scenarios passed.");

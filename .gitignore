@@ -70,3 +70,7 @@ frontend/public/autonomous-engineer-data/
 # Run History Manager v1 archive (one folder per run, never overwritten; regenerate with
 # `node scripts/autonomous-orchestrator.js`, or standalone via `node scripts/run-history-manager.js`)
 /runs/
+
+# Engineering Memory Engine v1 generated output (regenerate with `node scripts/autonomous-orchestrator.js`,
+# or standalone via `node scripts/engineering-memory.js`)
+/memory/

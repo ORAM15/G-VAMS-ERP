@@ -5,7 +5,8 @@
 // readIterationOutcome (fast, deterministic, no real engines needed and never touching this actual
 // repository's own artifacts). The CLI is exercised against real subprocesses using tiny fake stage scripts
 // (controllable exit codes, mirroring the fake-"claude"/fake-"gh" technique used elsewhere in this
-// pipeline), and one true end-to-end run drives the real eleven-stage chain (including Run History Manager).
+// pipeline), and one true end-to-end run drives the real twelve-stage chain (including Run History Manager
+// and Engineering Memory).
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -14,11 +15,12 @@ const { spawnSync } = require("child_process");
 const repoRoot = path.resolve(__dirname, "..");
 const source = fs.readFileSync(path.join(repoRoot, "scripts/autonomous-orchestrator.js"), "utf8");
 const runHistoryManagerSource = fs.readFileSync(path.join(repoRoot, "scripts/run-history-manager.js"), "utf8");
+const engineeringMemorySource = fs.readFileSync(path.join(repoRoot, "scripts/engineering-memory.js"), "utf8");
 
-// The nine pipeline engines this orchestrator spawns as real subprocesses. Run History Manager is
-// deliberately NOT in this list -- it is require()'d in-process (see runHistoryStage() in
-// autonomous-orchestrator.js), never spawned, so it needs a real, valid module file, not a fake exit-code
-// stub script.
+// The nine pipeline engines this orchestrator spawns as real subprocesses. Run History Manager and
+// Engineering Memory are deliberately NOT in this list -- both are require()'d in-process (see
+// runHistoryStage()/runMemoryStage() in autonomous-orchestrator.js), never spawned, so they each need a
+// real, valid module file, not a fake exit-code stub script.
 const ENGINE_SCRIPTS = [
   "repository-intelligence.js",
   "engineering-knowledge.js",
@@ -32,20 +34,25 @@ const ENGINE_SCRIPTS = [
   "github-publisher.js",
 ];
 
+// Stages that are always require()'d in-process, never spawned via spawnFn -- excluded from any assertion
+// counting "spawned" invocations.
+const IN_PROCESS_SCRIPTS = ["run-history-manager.js", "engineering-memory.js"];
+
 function writeFile(file, content) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, content);
 }
 
-// Every fixture also gets a real copy of run-history-manager.js alongside autonomous-orchestrator.js, since
-// runHistoryStage() require()s it in-process (not through the injected spawnFn) -- without it, every
-// runOrchestration() call in these tests would report Run History Manager as "WARN" (module not found)
-// rather than genuinely exercising it.
+// Every fixture also gets real copies of run-history-manager.js and engineering-memory.js alongside
+// autonomous-orchestrator.js, since runHistoryStage()/runMemoryStage() require() them in-process (not
+// through the injected spawnFn) -- without them, every runOrchestration() call in these tests would report
+// both stages as "WARN" (module not found) rather than genuinely exercising them.
 function makeFixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "autonomous-orchestrator-"));
   fs.mkdirSync(path.join(dir, "scripts"), { recursive: true });
   fs.writeFileSync(path.join(dir, "scripts/autonomous-orchestrator.js"), source);
   fs.writeFileSync(path.join(dir, "scripts/run-history-manager.js"), runHistoryManagerSource);
+  fs.writeFileSync(path.join(dir, "scripts/engineering-memory.js"), engineeringMemorySource);
   return dir;
 }
 
@@ -98,22 +105,25 @@ function ok(name) {
 //    Implementation Executor/Validation Engine/Reflection Engine loop, and the publish stages -- is recorded
 //    SKIPPED, never attempted (no exit code, no timing). Upfront stages are deterministic pure functions of
 //    already-fixed state, so there is nothing for the loop to meaningfully evaluate once one of them has
-//    failed. Run History Manager is the one deliberate exception -- it still runs unconditionally, since
-//    every autonomous execution (including a failed one) should leave behind a historical snapshot.
+//    failed. Run History Manager and Engineering Memory are the deliberate exceptions -- they still run
+//    unconditionally, since every autonomous execution (including a failed one) should leave behind a
+//    historical snapshot and an updated analysis of it.
 {
   const dir = makeFixture();
   const mod = requireFixture(dir);
   const result = mod.runOrchestration({ spawnFn: makeFakeSpawn("recommendation-engine.js"), cwd: dir });
   const failedIndex = mod.STAGES.findIndex((s) => s.script === "recommendation-engine.js");
-  const remaining = result.stages.slice(failedIndex + 1).filter((s) => s.script !== "run-history-manager.js");
+  const remaining = result.stages.slice(failedIndex + 1).filter((s) => !IN_PROCESS_SCRIPTS.includes(s.script));
   if (remaining.length === 0) throw new Error("expected at least one stage after the failure to verify SKIPPED behavior");
   if (remaining.some((s) => s.status !== "SKIPPED" || s.exitCode !== null || s.startTime !== null || s.durationMs !== null)) {
-    throw new Error(`expected every remaining stage (other than Run History Manager) to be cleanly SKIPPED (no exit code, no timing), got: ${JSON.stringify(remaining)}`);
+    throw new Error(`expected every remaining spawned stage to be cleanly SKIPPED (no exit code, no timing), got: ${JSON.stringify(remaining)}`);
   }
-  const historyStage = result.stages.find((s) => s.script === "run-history-manager.js");
-  if (historyStage.status !== "PASS") throw new Error("expected Run History Manager to still run (and succeed) unconditionally, even after an upfront failure");
+  for (const script of IN_PROCESS_SCRIPTS) {
+    const stage = result.stages.find((s) => s.script === script);
+    if (stage.status !== "PASS") throw new Error(`expected ${script} to still run (and succeed) unconditionally, even after an upfront failure`);
+  }
   if (result.iterationsUsed !== 0) throw new Error(`expected 0 loop iterations to be attempted after an upfront failure, got: ${result.iterationsUsed}`);
-  ok("every stage after an upfront failure is SKIPPED except Run History Manager, which still runs unconditionally, and the loop is never entered");
+  ok("every spawned stage after an upfront failure is SKIPPED except Run History Manager/Engineering Memory, which still run unconditionally, and the loop is never entered");
 }
 
 // 3. A loop-stage failure (Implementation Executor itself exits non-zero, e.g. "blocked") does NOT skip
@@ -145,11 +155,13 @@ function ok(name) {
   if (result.status !== "success") throw new Error(`expected overall status "success", got: ${result.status}`);
   if (result.stages.some((s) => s.status !== "PASS")) throw new Error("expected every stage to PASS");
   if (result.iterationsUsed !== 1) throw new Error(`expected exactly 1 iteration when approved on the first attempt, got: ${result.iterationsUsed}`);
-  const spawnedStageCount = mod.STAGES.filter((stage) => stage.script !== "run-history-manager.js").length;
-  if (callLog.length !== spawnedStageCount) throw new Error(`expected exactly ${spawnedStageCount} spawned stage invocations (Run History Manager is require()'d, not spawned), got: ${callLog.length}`);
-  const historyStage = result.stages.find((s) => s.script === "run-history-manager.js");
-  if (historyStage.status !== "PASS") throw new Error(`expected the real Run History Manager to genuinely succeed in this fixture, got: ${historyStage.status} (${historyStage.stderr})`);
-  ok("a fully successful run passes every stage (including the in-process Run History Manager), uses exactly 1 iteration, and reports overall status \"success\"");
+  const spawnedStageCount = mod.STAGES.filter((stage) => !IN_PROCESS_SCRIPTS.includes(stage.script)).length;
+  if (callLog.length !== spawnedStageCount) throw new Error(`expected exactly ${spawnedStageCount} spawned stage invocations (Run History Manager/Engineering Memory are require()'d, not spawned), got: ${callLog.length}`);
+  for (const script of IN_PROCESS_SCRIPTS) {
+    const stage = result.stages.find((s) => s.script === script);
+    if (stage.status !== "PASS") throw new Error(`expected the real ${script} to genuinely succeed in this fixture, got: ${stage.status} (${stage.stderr})`);
+  }
+  ok("a fully successful run passes every stage (including the in-process Run History Manager/Engineering Memory), uses exactly 1 iteration, and reports overall status \"success\"");
 }
 
 // 5. Iteration loop: a rejection with a recommended retry causes a second iteration to run; once that second
@@ -290,6 +302,7 @@ function ok(name) {
   fs.mkdirSync(path.join(cliDir, "scripts"), { recursive: true });
   fs.writeFileSync(path.join(cliDir, "scripts/autonomous-orchestrator.js"), source);
   fs.writeFileSync(path.join(cliDir, "scripts/run-history-manager.js"), runHistoryManagerSource);
+  fs.writeFileSync(path.join(cliDir, "scripts/engineering-memory.js"), engineeringMemorySource);
   for (const script of ENGINE_SCRIPTS) {
     const shouldFail = script === "decision-engine.js";
     writeFile(
@@ -303,9 +316,12 @@ function ok(name) {
   if (!failingRun.stdout.includes("Pull Request Generator... SKIPPED")) throw new Error(`expected clean console progress to show skipped stages, got:\n${failingRun.stdout}`);
   const failedRunJson = JSON.parse(fs.readFileSync(path.join(cliDir, "run/run.json"), "utf8"));
   if (failedRunJson.status !== "failed") throw new Error(`expected run.json status "failed", got: ${failedRunJson.status}`);
-  const failedHistoryStage = failedRunJson.stages.find((s) => s.script === "run-history-manager.js");
-  if (!failedHistoryStage || failedHistoryStage.status !== "PASS") throw new Error("expected Run History Manager to still run and succeed even after an upfront stage failure");
+  for (const script of IN_PROCESS_SCRIPTS) {
+    const stage = failedRunJson.stages.find((s) => s.script === script);
+    if (!stage || stage.status !== "PASS") throw new Error(`expected ${script} to still run and succeed even after an upfront stage failure`);
+  }
   if (!fs.existsSync(path.join(cliDir, "runs", "RUN-000001"))) throw new Error("expected a runs/RUN-000001 archive to be created even for a failed run");
+  if (!fs.existsSync(path.join(cliDir, "memory", "engineering-memory.json"))) throw new Error("expected memory/engineering-memory.json to be created even for a failed run");
 
   for (const script of ENGINE_SCRIPTS) {
     writeFile(path.join(cliDir, "scripts", script), `console.log("fake stage ok: ${script}"); process.exit(0);\n`);
@@ -350,6 +366,7 @@ function ok(name) {
     "scripts/validation-engine.js",
     "scripts/reflection-engine.js",
     "scripts/run-history-manager.js",
+    "scripts/engineering-memory.js",
     "scripts/pull-request-generator.js",
     "scripts/github-publisher.js",
     "publisher/github/client.js",
@@ -364,23 +381,30 @@ function ok(name) {
   if (!fs.existsSync(jsonPath) || !fs.existsSync(mdPath)) throw new Error(`expected run.json and run.md to be produced by the real end-to-end chain:\n${run.stdout}\n${run.stderr}`);
 
   const runRecord = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
-  if (runRecord.stages.length !== 11) throw new Error(`expected all 11 real stages (including Run History Manager) to be recorded, got: ${runRecord.stages.length}`);
+  if (runRecord.stages.length !== 12) throw new Error(`expected all 12 real stages (including Run History Manager and Engineering Memory) to be recorded, got: ${runRecord.stages.length}`);
   if (!runRecord.stages.some((s) => s.script === "reflection-engine.js")) throw new Error("expected Reflection Engine to be recorded among the real stages");
   const historyStage = runRecord.stages.find((s) => s.script === "run-history-manager.js");
   if (!historyStage || historyStage.status !== "PASS") throw new Error(`expected Run History Manager to genuinely succeed in the real end-to-end chain, got: ${JSON.stringify(historyStage)}`);
+  const memoryStage = runRecord.stages.find((s) => s.script === "engineering-memory.js");
+  if (!memoryStage || memoryStage.status !== "PASS") throw new Error(`expected Engineering Memory to genuinely succeed in the real end-to-end chain, got: ${JSON.stringify(memoryStage)}`);
   if (!runRecord.runHistory || !fs.existsSync(path.join(dir, "runs", runRecord.runHistory.runId, "metadata.json"))) {
     throw new Error(`expected a real runs/${runRecord.runHistory && runRecord.runHistory.runId}/metadata.json archive to exist`);
   }
+  if (!runRecord.engineeringMemory || !fs.existsSync(runRecord.engineeringMemory.jsonPath)) {
+    throw new Error("expected a real memory/engineering-memory.json to exist, referenced from run.json's own engineeringMemory field");
+  }
+  if (runRecord.engineeringMemory.runsAnalyzed < 1) throw new Error("expected Engineering Memory to have analyzed at least the run it was just given (Run History Manager runs first)");
   if (run.status === 0) {
     if (runRecord.status !== "success" || runRecord.stages.some((s) => s.status !== "PASS")) throw new Error(`expected a fully passing real run.json, got: ${JSON.stringify(runRecord.stages)}`);
     if (!runRecord.artifactsProduced.includes("publish/publish.json")) throw new Error("expected publish/publish.json to be listed as a produced artifact for a fully successful real run");
     if (!runRecord.artifactsProduced.includes("reflection/reflection-report.json")) throw new Error("expected reflection/reflection-report.json to be listed as a produced artifact");
+    if (!runRecord.artifactsProduced.includes("memory/engineering-memory.json")) throw new Error("expected memory/engineering-memory.json to be listed as a produced artifact");
     if (runRecord.runHistory.archivedFiles.length === 0) throw new Error("expected the real successful run to have archived at least one real artifact");
   } else {
     if (runRecord.status !== "failed") throw new Error(`expected run.json status "failed" to match a non-zero CLI exit code, got: ${runRecord.status}`);
   }
 
-  ok("the real eleven-stage chain, driven by the real orchestrator CLI (including Reflection Engine and Run History Manager), produces a valid and internally-consistent run.json/run.md end to end, with a real runs/ archive");
+  ok("the real twelve-stage chain, driven by the real orchestrator CLI (including Reflection Engine, Run History Manager, and Engineering Memory), produces a valid and internally-consistent run.json/run.md end to end, with real runs/ and memory/ output");
 }
 
 // 15. Run History Manager integration: it is called exactly once (in-process, never via spawnFn) after the
@@ -491,6 +515,84 @@ function ok(name) {
   if (loopStageNames !== 2) throw new Error(`expected Implementation Executor to appear twice in stageResults (once per iteration), got: ${loopStageNames}`);
   if (result.status !== "success") throw new Error("expected the run to ultimately succeed after the retry");
   ok("Run History Manager is invoked exactly once per whole run (never once per iteration), and its context reflects the real final iteration/retry counts");
+}
+
+// 19. Engineering Memory integration: it is called exactly once (in-process, never via spawnFn), AFTER Run
+//     History Manager and before the publish stages -- verified via an injected fake module.
+{
+  const dir = makeFixture();
+  const mod = requireFixture(dir);
+  const calls = [];
+  const fakeEngineeringMemory = { analyzeSync: (options) => (calls.push(options), { memory: { runsAnalyzed: 3 }, jsonPath: path.join(dir, "memory", "engineering-memory.json"), mdPath: path.join(dir, "memory", "report.md") }) };
+  const result = mod.runOrchestration({
+    spawnFn: makeFakeSpawn(null),
+    cwd: dir,
+    engineeringMemory: fakeEngineeringMemory,
+    readIterationOutcome: () => ({ approvedForPR: true, retryRecommended: false, validationScore: 100 }),
+  });
+  if (calls.length !== 1) throw new Error(`expected Engineering Memory to be invoked exactly once, got: ${calls.length}`);
+  const historyIndex = result.stages.findIndex((s) => s.script === "run-history-manager.js");
+  const memoryIndex = result.stages.findIndex((s) => s.script === "engineering-memory.js");
+  const prgIndex = result.stages.findIndex((s) => s.script === "pull-request-generator.js");
+  if (historyIndex === -1 || memoryIndex === -1 || prgIndex === -1 || !(historyIndex < memoryIndex && memoryIndex < prgIndex)) {
+    throw new Error("expected Engineering Memory to run after Run History Manager and before Pull Request Generator");
+  }
+  if (!result.engineeringMemory || result.engineeringMemory.runsAnalyzed !== 3) throw new Error("expected the run record's engineeringMemory field to reflect what Engineering Memory actually returned");
+  ok("Engineering Memory is invoked exactly once, in-process, positioned after Run History Manager and before the publish stages");
+}
+
+// 20. Engineering Memory failure never crashes the orchestrator: an injected module whose analyzeSync throws
+//     is caught, logged ("Engineering Memory failed"), and the run continues to completion.
+{
+  const dir = makeFixture();
+  const mod = requireFixture(dir);
+  const throwingEngineeringMemory = {
+    analyzeSync: () => {
+      throw new Error("simulated corrupted runs/ directory");
+    },
+  };
+  const originalError = console.error;
+  let loggedMemoryFailure = false;
+  console.error = (...args) => {
+    if (args.join(" ").includes("Engineering Memory failed")) loggedMemoryFailure = true;
+  };
+  let result;
+  try {
+    result = mod.runOrchestration({
+      spawnFn: makeFakeSpawn(null),
+      cwd: dir,
+      engineeringMemory: throwingEngineeringMemory,
+      readIterationOutcome: () => ({ approvedForPR: true, retryRecommended: false, validationScore: 100 }),
+    });
+  } finally {
+    console.error = originalError;
+  }
+  if (!loggedMemoryFailure) throw new Error('expected "Engineering Memory failed" to be logged when analyzeSync throws');
+  const memoryStage = result.stages.find((s) => s.script === "engineering-memory.js");
+  if (memoryStage.status === "FAIL") throw new Error("expected an Engineering Memory failure to never be reported as a blocking FAIL");
+  if (result.status !== "success") throw new Error(`expected the orchestrator to still succeed overall despite Engineering Memory failing, got: ${result.status}`);
+  const prg = result.stages.find((s) => s.script === "pull-request-generator.js");
+  if (prg.status !== "PASS") throw new Error("expected Pull Request Generator to still run normally after an Engineering Memory failure");
+  if (result.engineeringMemory !== null) throw new Error("expected engineeringMemory to be null when analysis failed, never a fabricated result");
+  ok("Engineering Memory throwing never crashes the orchestrator: it is logged, does not block the publish stages, and the run still succeeds overall");
+}
+
+// 21. Engineering Memory runs even after a failed validation, and even after the max iterations are
+//     exhausted without approval -- exactly once per whole run either way.
+{
+  const dir = makeFixture();
+  const mod = requireFixture(dir);
+  const calls = [];
+  const fakeEngineeringMemory = { analyzeSync: (options) => (calls.push(options), { memory: { runsAnalyzed: 1 }, jsonPath: path.join(dir, "memory", "engineering-memory.json"), mdPath: "" }) };
+  const result = mod.runOrchestration({
+    spawnFn: makeFakeSpawn("validation-engine.js"),
+    cwd: dir,
+    engineeringMemory: fakeEngineeringMemory,
+    readIterationOutcome: NEVER_APPROVE_NO_RETRY,
+  });
+  if (calls.length !== 1) throw new Error("expected Engineering Memory to still be invoked once after a failed validation");
+  if (result.status !== "failed") throw new Error("expected the overall run to be reported as failed");
+  ok("Engineering Memory runs (exactly once) even when validation is rejected");
 }
 
 console.log("All Autonomous Engineering Orchestrator v1 regression scenarios passed.");

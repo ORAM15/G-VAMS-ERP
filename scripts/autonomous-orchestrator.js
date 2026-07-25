@@ -77,11 +77,18 @@ const FINAL_STAGES = [
 // failure NEVER stops the run (see runHistoryStage()) -- Run History Manager must never crash the orchestrator.
 const HISTORY_STAGE = { name: "Run History Manager", script: "run-history-manager.js" };
 
+// Engineering Memory runs immediately after Run History Manager, for the same reason and with the same
+// non-blocking contract: it reads whatever runs/ now contains (including the run Run History Manager just
+// archived) and is unconditional/never crashes the orchestrator (see runMemoryStage()). It is NOT an AI
+// component -- deterministic JSON analysis only (no embeddings, no vector database, no LLM) -- and, like
+// Run History Manager, is called in-process via require(), never spawned as a subprocess.
+const MEMORY_STAGE = { name: "Engineering Memory", script: "engineering-memory.js" };
+
 // Flat view of every stage this orchestrator can run, in their natural single-pass order. Iteration 2+ of
 // the loop is captured separately in run.json's `iterations` field (see runOrchestration()) -- this flat
 // list always reflects the upfront stages plus the FINAL (decisive) loop attempt plus Run History Manager
-// plus the publish stages.
-const STAGES = [...UPFRONT_STAGES, ...LOOP_STAGES, HISTORY_STAGE, ...FINAL_STAGES];
+// plus Engineering Memory plus the publish stages.
+const STAGES = [...UPFRONT_STAGES, ...LOOP_STAGES, HISTORY_STAGE, MEMORY_STAGE, ...FINAL_STAGES];
 
 // Every artifact any stage might produce, relative to the repository root. Existence-checked only -- this
 // orchestrator never opens or parses any of these; validating their content is each producing engine's own
@@ -104,6 +111,8 @@ const KNOWN_ARTIFACTS = [
   "validation/validation.md",
   "reflection/reflection-report.json",
   "reflection/reflection-report.md",
+  "memory/engineering-memory.json",
+  "memory/report.md",
   "pull-request/pull-request.json",
   "pull-request/pull-request.md",
   "publish/publish.json",
@@ -240,6 +249,37 @@ function runHistoryStage(deps, historyContext) {
 }
 
 /**
+ * Runs Engineering Memory once Run History Manager has archived the run, analyzing whatever runs/ now
+ * contains. Never throws and never sets the orchestrator's `stopped` flag -- a failure is logged
+ * ("Engineering Memory failed") and the run continues exactly as if it had succeeded, per this engine's own
+ * explicit non-blocking contract (identical to Run History Manager's own).
+ * @param {{cwd?: string, engineeringMemory?: {analyzeSync: Function}, memoryRunsDir?: string, memoryOutputDir?: string}} [deps]
+ *   deps.engineeringMemory lets tests inject a fake module without needing a real failure mode.
+ * @returns {{name: string, script: string, status: string, exitCode: null, startTime: string, endTime: string, durationMs: number, stdout: string, stderr: string, engineeringMemory: (object|null)}}
+ */
+function runMemoryStage(deps) {
+  const startTime = new Date().toISOString();
+  const startedAt = Date.now();
+  let status = "PASS";
+  let stdout = "";
+  let stderr = "";
+  let engineeringMemory = null;
+  try {
+    const engineeringMemoryModule = (deps && deps.engineeringMemory) || require("./engineering-memory");
+    const result = engineeringMemoryModule.analyzeSync({ runsDir: deps && deps.memoryRunsDir, outputDir: deps && deps.memoryOutputDir });
+    stdout = `Analyzed ${result.memory.runsAnalyzed} run(s); wrote ${path.relative(root, result.jsonPath)}`;
+    engineeringMemory = { runsAnalyzed: result.memory.runsAnalyzed, jsonPath: result.jsonPath };
+  } catch (error) {
+    status = "WARN";
+    stderr = `Engineering Memory failed: ${error.message}`;
+    console.error("Engineering Memory failed:", error.message);
+  }
+  const durationMs = Date.now() - startedAt;
+  const endTime = new Date().toISOString();
+  return { name: MEMORY_STAGE.name, script: MEMORY_STAGE.script, status, exitCode: null, startTime, endTime, durationMs, stdout, stderr, engineeringMemory };
+}
+
+/**
  * Runs every stage in order -- the once-only upfront stages, the Implementation Executor/Validation Engine/
  * Reflection Engine loop (up to the configured maximum iterations), and the once-only publish stages --
  * stopping immediately (recording every remaining stage as SKIPPED) the moment an upfront or publish stage
@@ -330,6 +370,13 @@ function runOrchestration(deps) {
   if (deps && deps.onStageEvent) deps.onStageEvent({ phase: "end", stage: HISTORY_STAGE, result: historyResult });
   stages.push(historyResult);
 
+  // Engineering Memory: also unconditional, also never affects `stopped` -- deterministic analysis over
+  // whatever runs/ now contains (including the run Run History Manager just archived above).
+  if (deps && deps.onStageEvent) deps.onStageEvent({ phase: "start", stage: MEMORY_STAGE });
+  const memoryResult = runMemoryStage({ ...deps, memoryRunsDir: (deps && deps.memoryRunsDir) || (deps && deps.runsHistoryDir) });
+  if (deps && deps.onStageEvent) deps.onStageEvent({ phase: "end", stage: MEMORY_STAGE, result: memoryResult });
+  stages.push(memoryResult);
+
   for (const stage of FINAL_STAGES) {
     if (!approved || stopped) {
       stages.push(skipStage(stage, deps));
@@ -343,7 +390,18 @@ function runOrchestration(deps) {
   const finishTime = new Date().toISOString();
   const durationMs = Date.now() - startedAt;
   const status = stages.every((stage) => stage.status === "PASS" || stage.status === "WARN") ? "success" : "failed";
-  return { startTime, finishTime, durationMs, status, stages, iterations, maxIterations: maxIter, iterationsUsed, runHistory: historyResult.runHistory };
+  return {
+    startTime,
+    finishTime,
+    durationMs,
+    status,
+    stages,
+    iterations,
+    maxIterations: maxIter,
+    iterationsUsed,
+    runHistory: historyResult.runHistory,
+    engineeringMemory: memoryResult.engineeringMemory,
+  };
 }
 
 /**
@@ -369,7 +427,7 @@ function buildRunId(startTime) {
 
 /**
  * Builds the complete run record from an already-computed orchestration result.
- * @param {{startTime: string, finishTime: string, durationMs: number, status: string, stages: object[], iterations: object[], maxIterations: number, iterationsUsed: number, runHistory: (object|null)}} orchestrationResult
+ * @param {{startTime: string, finishTime: string, durationMs: number, status: string, stages: object[], iterations: object[], maxIterations: number, iterationsUsed: number, runHistory: (object|null), engineeringMemory: (object|null)}} orchestrationResult
  * @param {string} [baseDir] defaults to the repository root; used by tests running against a temp fixture
  * @returns {object} matching run.json's shape
  */
@@ -385,6 +443,7 @@ function buildRunRecord(orchestrationResult, baseDir) {
     iterationsUsed: orchestrationResult.iterationsUsed,
     iterations: orchestrationResult.iterations,
     runHistory: orchestrationResult.runHistory,
+    engineeringMemory: orchestrationResult.engineeringMemory,
     artifactsProduced: findArtifactsProduced(baseDir),
     timestamp: new Date().toISOString(),
   };
@@ -450,6 +509,14 @@ function renderMarkdown(run) {
   lines.push("## Run History", "");
   lines.push(
     run.runHistory ? `Archived to \`${path.relative(root, run.runHistory.runDir)}\` (run id \`${run.runHistory.runId}\`, ${run.runHistory.archivedFiles.length} artifact(s)).` : "History generation failed; no archive was created for this run.",
+    ""
+  );
+
+  lines.push("## Engineering Memory", "");
+  lines.push(
+    run.engineeringMemory
+      ? `Analyzed ${run.engineeringMemory.runsAnalyzed} run(s); wrote \`${path.relative(root, run.engineeringMemory.jsonPath)}\`.`
+      : "Engineering Memory failed; no analysis was produced for this run.",
     ""
   );
 
@@ -529,11 +596,13 @@ module.exports = {
   UPFRONT_STAGES,
   LOOP_STAGES,
   HISTORY_STAGE,
+  MEMORY_STAGE,
   FINAL_STAGES,
   STAGES,
   KNOWN_ARTIFACTS,
   runStage,
   runHistoryStage,
+  runMemoryStage,
   runOrchestration,
   defaultReadIterationOutcome,
   findArtifactsProduced,

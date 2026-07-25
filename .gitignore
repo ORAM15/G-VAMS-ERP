@@ -78,3 +78,7 @@ frontend/public/autonomous-engineer-data/
 # Historical Context Retriever v1 generated output (regenerate with `node scripts/autonomous-orchestrator.js`,
 # or standalone via `node scripts/historical-context-retriever.js`)
 /historical-context/
+
+# Execution Planner v1 generated output (regenerate with `node scripts/autonomous-orchestrator.js`,
+# or standalone via `node scripts/execution-planner.js`)
+/execution-plan/

@@ -59,9 +59,18 @@ const UPFRONT_STAGES_BEFORE_HISTORICAL_CONTEXT = [
 // other surrounding stage need no changes at all. scripts/decision-engine.js itself is untouched and still
 // runs standalone (`node scripts/decision-engine.js`, and several other engines' own end-to-end test
 // fixtures still spawn it directly) -- only this orchestrator's own stage slot was swapped.
+// Execution Planner v1 sits between Adaptive Decision Engine and Implementation Request Engine -- an
+// ordinary spawned, stop-on-fail upfront stage (this task's own spec gives it no special non-blocking
+// failure policy, unlike Historical Context Retriever/Run History Manager/Engineering Memory: missing
+// OPTIONAL inputs of its own -- recommendations.json/repository-analysis.json/engineering-knowledge.json --
+// are handled entirely inside execution-planner.js itself, degrading to the best available plan; only its
+// one required input, decision/adaptive-decision.json, can make it exit non-zero, and that file is always
+// produced by the stage immediately before it). It writes a standalone execution-plan/ artifact that
+// Implementation Request Engine does not read -- inserted without changing any downstream stage.
 const UPFRONT_STAGES_AFTER_HISTORICAL_CONTEXT = [
   { name: "Recommendation Engine", script: "recommendation-engine.js" },
   { name: "Adaptive Decision Engine", script: "adaptive-decision-engine.js" },
+  { name: "Execution Planner", script: "execution-planner.js" },
   { name: "Implementation Request Engine", script: "implementation-request-engine.js" },
 ];
 
@@ -128,6 +137,8 @@ const KNOWN_ARTIFACTS = [
   "decision/decision.md",
   "decision/adaptive-decision.json",
   "decision/adaptive-decision.md",
+  "execution-plan/execution-plan.json",
+  "execution-plan/execution-plan.md",
   "implementation-request/implementation-request.json",
   "implementation-request/implementation-request.md",
   "execution/execution.json",

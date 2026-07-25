@@ -5,8 +5,8 @@
 // readIterationOutcome (fast, deterministic, no real engines needed and never touching this actual
 // repository's own artifacts). The CLI is exercised against real subprocesses using tiny fake stage scripts
 // (controllable exit codes, mirroring the fake-"claude"/fake-"gh" technique used elsewhere in this
-// pipeline), and one true end-to-end run drives the real thirteen-stage chain (including Run History
-// Manager, Historical Context Retriever, and Engineering Memory).
+// pipeline), and one true end-to-end run drives the real fourteen-stage chain (including Run History
+// Manager, Historical Context Retriever, Execution Planner, and Engineering Memory).
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -18,7 +18,7 @@ const runHistoryManagerSource = fs.readFileSync(path.join(repoRoot, "scripts/run
 const engineeringMemorySource = fs.readFileSync(path.join(repoRoot, "scripts/engineering-memory.js"), "utf8");
 const historicalContextRetrieverSource = fs.readFileSync(path.join(repoRoot, "scripts/historical-context-retriever.js"), "utf8");
 
-// The eight pipeline engines this orchestrator spawns as real subprocesses. Run History Manager, Engineering
+// The eleven pipeline engines this orchestrator spawns as real subprocesses. Run History Manager, Engineering
 // Memory, and Historical Context Retriever are deliberately NOT in this list -- all three are require()'d
 // in-process (see runHistoryStage()/runMemoryStage()/runHistoricalContextStage() in
 // autonomous-orchestrator.js), never spawned, so they each need a real, valid module file, not a fake
@@ -28,6 +28,7 @@ const ENGINE_SCRIPTS = [
   "engineering-knowledge.js",
   "recommendation-engine.js",
   "adaptive-decision-engine.js",
+  "execution-planner.js",
   "implementation-request-engine.js",
   "implementation-executor.js",
   "validation-engine.js",
@@ -366,9 +367,9 @@ function ok(name) {
   ok("the real CLI, run against real (fake) stage subprocesses, exits 1 and stops immediately on an upfront failure, and exits 0 when every stage passes and validation is approved -- both runs archived sequentially under runs/");
 }
 
-// 14. End-to-end execution: the real thirteen-stage chain, driven entirely by the real orchestrator CLI using
-//     the real engine sources (including the real Reflection Engine and Historical Context Retriever),
-//     produces a valid, internally-consistent run.json/run.md.
+// 14. End-to-end execution: the real fourteen-stage chain, driven entirely by the real orchestrator CLI using
+//     the real engine sources (including the real Reflection Engine, Historical Context Retriever, and
+//     Execution Planner), produces a valid, internally-consistent run.json/run.md.
 {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "autonomous-orchestrator-e2e-"));
   fs.mkdirSync(path.join(dir, "scripts"), { recursive: true });
@@ -380,6 +381,7 @@ function ok(name) {
     "scripts/historical-context-retriever.js",
     "scripts/recommendation-engine.js",
     "scripts/adaptive-decision-engine.js",
+    "scripts/execution-planner.js",
     "scripts/implementation-request-engine.js",
     "scripts/implementation-executor.js",
     "scripts/validation-engine.js",
@@ -400,7 +402,7 @@ function ok(name) {
   if (!fs.existsSync(jsonPath) || !fs.existsSync(mdPath)) throw new Error(`expected run.json and run.md to be produced by the real end-to-end chain:\n${run.stdout}\n${run.stderr}`);
 
   const runRecord = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
-  if (runRecord.stages.length !== 13) throw new Error(`expected all 13 real stages (including Run History Manager, Historical Context Retriever, and Engineering Memory) to be recorded, got: ${runRecord.stages.length}`);
+  if (runRecord.stages.length !== 14) throw new Error(`expected all 14 real stages (including Run History Manager, Historical Context Retriever, Execution Planner, and Engineering Memory) to be recorded, got: ${runRecord.stages.length}`);
   if (!runRecord.stages.some((s) => s.script === "reflection-engine.js")) throw new Error("expected Reflection Engine to be recorded among the real stages");
   const historyStage = runRecord.stages.find((s) => s.script === "run-history-manager.js");
   if (!historyStage || historyStage.status !== "PASS") throw new Error(`expected Run History Manager to genuinely succeed in the real end-to-end chain, got: ${JSON.stringify(historyStage)}`);
@@ -413,6 +415,15 @@ function ok(name) {
   if (!fs.existsSync(path.join(dir, "decision", "adaptive-decision.json")) || !fs.existsSync(path.join(dir, "decision", "decision.json"))) {
     throw new Error("expected Adaptive Decision Engine to produce both decision/adaptive-decision.json and the backward-compatible decision/decision.json");
   }
+  const executionPlannerStage = runRecord.stages.find((s) => s.script === "execution-planner.js");
+  if (!executionPlannerStage || executionPlannerStage.status !== "PASS") throw new Error(`expected Execution Planner to genuinely succeed in the real end-to-end chain, got: ${JSON.stringify(executionPlannerStage)}`);
+  const adaptiveDecisionIndex = runRecord.stages.findIndex((s) => s.script === "adaptive-decision-engine.js");
+  const executionPlannerIndex = runRecord.stages.findIndex((s) => s.script === "execution-planner.js");
+  const implementationRequestIndex = runRecord.stages.findIndex((s) => s.script === "implementation-request-engine.js");
+  if (!(adaptiveDecisionIndex < executionPlannerIndex && executionPlannerIndex < implementationRequestIndex)) {
+    throw new Error("expected Execution Planner to run between Adaptive Decision Engine and Implementation Request Engine in the real chain");
+  }
+  if (!fs.existsSync(path.join(dir, "execution-plan", "execution-plan.json"))) throw new Error("expected execution-plan/execution-plan.json to be produced by the real end-to-end chain");
   const historicalContextIndex = runRecord.stages.findIndex((s) => s.script === "historical-context-retriever.js");
   const recommendationIndex = runRecord.stages.findIndex((s) => s.script === "recommendation-engine.js");
   if (historicalContextIndex === -1 || recommendationIndex === -1 || historicalContextIndex >= recommendationIndex) {
@@ -435,12 +446,13 @@ function ok(name) {
     if (!runRecord.artifactsProduced.includes("memory/engineering-memory.json")) throw new Error("expected memory/engineering-memory.json to be listed as a produced artifact");
     if (!runRecord.artifactsProduced.includes("historical-context/historical-context.json")) throw new Error("expected historical-context/historical-context.json to be listed as a produced artifact");
     if (!runRecord.artifactsProduced.includes("decision/adaptive-decision.json")) throw new Error("expected decision/adaptive-decision.json to be listed as a produced artifact");
+    if (!runRecord.artifactsProduced.includes("execution-plan/execution-plan.json")) throw new Error("expected execution-plan/execution-plan.json to be listed as a produced artifact");
     if (runRecord.runHistory.archivedFiles.length === 0) throw new Error("expected the real successful run to have archived at least one real artifact");
   } else {
     if (runRecord.status !== "failed") throw new Error(`expected run.json status "failed" to match a non-zero CLI exit code, got: ${runRecord.status}`);
   }
 
-  ok("the real thirteen-stage chain, driven by the real orchestrator CLI (including Reflection Engine, Historical Context Retriever, Run History Manager, and Engineering Memory), produces a valid and internally-consistent run.json/run.md end to end, with real runs/, historical-context/, and memory/ output");
+  ok("the real fourteen-stage chain, driven by the real orchestrator CLI (including Reflection Engine, Historical Context Retriever, Execution Planner, Run History Manager, and Engineering Memory), produces a valid and internally-consistent run.json/run.md end to end, with real runs/, historical-context/, execution-plan/, and memory/ output");
 }
 
 // 15. Run History Manager integration: it is called exactly once (in-process, never via spawnFn) after the
@@ -545,9 +557,9 @@ function ok(name) {
   if (calls.length !== 1) throw new Error(`expected Run History Manager to be invoked exactly once even after a retry, got: ${calls.length}`);
   if (calls[0].iterations !== 2 || calls[0].retryCount !== 1) throw new Error(`expected the history context to reflect the real 2 iterations / 1 retry, got: ${JSON.stringify({ iterations: calls[0].iterations, retryCount: calls[0].retryCount })}`);
   if (calls[0].validationScore !== 95) throw new Error(`expected the history context to reflect the FINAL iteration's validation score, got: ${calls[0].validationScore}`);
-  // stageResults = 6 upfront stages (including Historical Context Retriever) + both iterations' 3 loop
-  // stages each (6) = 12 total.
-  if (calls[0].stageResults.length !== 12) throw new Error(`expected stageResults to include the 6 upfront stages plus both iterations' 3 stages each (12 total), got: ${calls[0].stageResults.length}`);
+  // stageResults = 7 upfront stages (including Historical Context Retriever and Execution Planner) + both
+  // iterations' 3 loop stages each (6) = 13 total.
+  if (calls[0].stageResults.length !== 13) throw new Error(`expected stageResults to include the 7 upfront stages plus both iterations' 3 stages each (13 total), got: ${calls[0].stageResults.length}`);
   const loopStageNames = calls[0].stageResults.filter((s) => s.name === "Implementation Executor").length;
   if (loopStageNames !== 2) throw new Error(`expected Implementation Executor to appear twice in stageResults (once per iteration), got: ${loopStageNames}`);
   if (result.status !== "success") throw new Error("expected the run to ultimately succeed after the retry");

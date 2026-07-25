@@ -67,10 +67,21 @@ const FINAL_STAGES = [
   { name: "GitHub Publisher Adapter", script: "github-publisher.js" },
 ];
 
+// Run History Manager runs unconditionally once the loop concludes (approved, rejected, or exhausted) and
+// before the publish stages -- "every autonomous execution should leave behind a complete historical
+// snapshot," including a failed or not-retried one. Unlike every other stage it is called in-process (via
+// require(), not spawned as a subprocess) since its real value is the rich, already-in-memory run data the
+// orchestrator holds (stage timings, captured console output) -- exactly the same in-process-require pattern
+// already used for Provider/Publisher Adapters elsewhere in this pipeline (see resolveProvider() in
+// implementation-executor.js, resolvePublisherClient() here for github-publisher.js's own stage). Its own
+// failure NEVER stops the run (see runHistoryStage()) -- Run History Manager must never crash the orchestrator.
+const HISTORY_STAGE = { name: "Run History Manager", script: "run-history-manager.js" };
+
 // Flat view of every stage this orchestrator can run, in their natural single-pass order. Iteration 2+ of
 // the loop is captured separately in run.json's `iterations` field (see runOrchestration()) -- this flat
-// list always reflects the upfront stages plus the FINAL (decisive) loop attempt plus the publish stages.
-const STAGES = [...UPFRONT_STAGES, ...LOOP_STAGES, ...FINAL_STAGES];
+// list always reflects the upfront stages plus the FINAL (decisive) loop attempt plus Run History Manager
+// plus the publish stages.
+const STAGES = [...UPFRONT_STAGES, ...LOOP_STAGES, HISTORY_STAGE, ...FINAL_STAGES];
 
 // Every artifact any stage might produce, relative to the repository root. Existence-checked only -- this
 // orchestrator never opens or parses any of these; validating their content is each producing engine's own
@@ -162,22 +173,26 @@ function runOne(stage, deps, iteration) {
 }
 
 /**
- * Reads validation.json's approvedForPR and reflection-report.json's retryRecommended off disk after one
- * iteration of the loop trio has run -- the two structured signals loop continuation is decided from.
- * Missing or unparseable files (e.g. because Reflection Engine itself failed to run) are treated as "not
- * approved, do not retry" -- never guessed at.
+ * Reads validation.json's approvedForPR/score and reflection-report.json's retryRecommended off disk after
+ * one iteration of the loop trio has run -- the structured signals loop continuation (and, once the loop
+ * concludes, Run History Manager's own metadata/metrics) are built from. Missing or unparseable files (e.g.
+ * because Reflection Engine itself failed to run) are treated as "not approved, do not retry, no score" --
+ * never guessed at.
  * @param {{cwd?: string}} [deps]
- * @returns {{approvedForPR: boolean, retryRecommended: boolean}}
+ * @returns {{approvedForPR: boolean, retryRecommended: boolean, validationScore: (number|null)}}
  */
 function defaultReadIterationOutcome(deps) {
   const cwd = (deps && deps.cwd) || root;
   let approvedForPR = false;
+  let validationScore = null;
   let retryRecommended = false;
   try {
     const validation = JSON.parse(fs.readFileSync(path.join(cwd, "validation", "validation.json"), "utf8"));
     approvedForPR = validation.approvedForPR === true;
+    validationScore = typeof validation.score === "number" ? validation.score : null;
   } catch (error) {
     approvedForPR = false;
+    validationScore = null;
   }
   try {
     const reflection = JSON.parse(fs.readFileSync(path.join(cwd, "reflection", "reflection-report.json"), "utf8"));
@@ -185,11 +200,43 @@ function defaultReadIterationOutcome(deps) {
   } catch (error) {
     retryRecommended = false;
   }
-  return { approvedForPR, retryRecommended };
+  return { approvedForPR, retryRecommended, validationScore };
 }
 
 function resolveReadIterationOutcome(deps) {
   return (deps && deps.readIterationOutcome) || defaultReadIterationOutcome;
+}
+
+/**
+ * Runs Run History Manager once the implementation loop has concluded (approved, rejected, or exhausted),
+ * archiving a complete snapshot of the run so far. Never throws and never sets the orchestrator's `stopped`
+ * flag -- Run History Manager failing to archive is logged ("History generation failed") and the run
+ * continues exactly as if it had succeeded, per this engine's own explicit non-blocking contract.
+ * @param {{cwd?: string, runHistoryManager?: {archiveRunSync: Function}}} [deps] deps.runHistoryManager lets
+ *   tests inject a fake module (e.g. one whose archiveRunSync throws) without needing a real failure mode.
+ * @param {object} historyContext the context object passed straight through to archiveRunSync()
+ * @returns {{name: string, script: string, status: string, exitCode: null, startTime: string, endTime: string, durationMs: number, stdout: string, stderr: string, runHistory: (object|null)}}
+ */
+function runHistoryStage(deps, historyContext) {
+  const startTime = new Date().toISOString();
+  const startedAt = Date.now();
+  let status = "PASS";
+  let stdout = "";
+  let stderr = "";
+  let runHistory = null;
+  try {
+    const runHistoryManager = (deps && deps.runHistoryManager) || require("./run-history-manager");
+    const result = runHistoryManager.archiveRunSync(historyContext);
+    stdout = `Archived ${result.archivedFiles.length} artifact(s) to ${path.relative(historyContext.sourceDir || root, result.runDir)}`;
+    runHistory = { runId: result.runId, runDir: result.runDir, archivedFiles: result.archivedFiles };
+  } catch (error) {
+    status = "WARN";
+    stderr = `History generation failed: ${error.message}`;
+    console.error("History generation failed:", error.message);
+  }
+  const durationMs = Date.now() - startedAt;
+  const endTime = new Date().toISOString();
+  return { name: HISTORY_STAGE.name, script: HISTORY_STAGE.script, status, exitCode: null, startTime, endTime, durationMs, stdout, stderr, runHistory };
 }
 
 /**
@@ -206,6 +253,7 @@ function resolveReadIterationOutcome(deps) {
 function runOrchestration(deps) {
   const startTime = new Date().toISOString();
   const startedAt = Date.now();
+  const upfrontResults = [];
   const stages = [];
   const iterations = [];
   let stopped = false;
@@ -218,12 +266,14 @@ function runOrchestration(deps) {
     }
     const result = runOne(stage, deps);
     stages.push(result);
+    upfrontResults.push(result);
     if (result.status !== "PASS") stopped = true;
   }
 
   const maxIter = resolveMaxIterations(deps);
   const readIterationOutcome = resolveReadIterationOutcome(deps);
   let iterationsUsed = 0;
+  let lastOutcome = { approvedForPR: false, retryRecommended: false, validationScore: null };
 
   if (!stopped) {
     for (let iteration = 1; iteration <= maxIter; iteration += 1) {
@@ -233,7 +283,8 @@ function runOrchestration(deps) {
 
       const reflectionResult = iterationStages[iterationStages.length - 1];
       const infraFailure = reflectionResult.status !== "PASS";
-      const outcome = infraFailure ? { approvedForPR: false, retryRecommended: false } : readIterationOutcome(deps);
+      const outcome = infraFailure ? { approvedForPR: false, retryRecommended: false, validationScore: null } : readIterationOutcome(deps);
+      lastOutcome = outcome;
 
       if (outcome.approvedForPR) {
         approved = true;
@@ -252,6 +303,33 @@ function runOrchestration(deps) {
     LOOP_STAGES.forEach((stage) => stages.push(skipStage(stage, deps)));
   }
 
+  // Run History Manager: unconditional, regardless of `stopped`/`approved` -- "every autonomous execution
+  // should leave behind a complete historical snapshot," including a failed one. Never affects `stopped`.
+  const retryCount = Math.max(0, iterationsUsed - 1);
+  const historySourceDir = (deps && deps.cwd) || root;
+  if (deps && deps.onStageEvent) deps.onStageEvent({ phase: "start", stage: HISTORY_STAGE });
+  const historyResult = runHistoryStage(deps, {
+    runsDir: deps && deps.runsHistoryDir,
+    sourceDir: historySourceDir,
+    status: approved ? "SUCCESS" : "FAILED",
+    startedAt: startTime,
+    finishedAt: new Date().toISOString(),
+    durationMs: Date.now() - startedAt,
+    goal: process.env.GVAMS_GOAL || null,
+    provider: process.env.EXECUTION_PROVIDER || null,
+    profile: process.env.GVAMS_PROFILE || null,
+    iterations: iterationsUsed,
+    retryCount,
+    validationPassed: lastOutcome.approvedForPR,
+    validationScore: lastOutcome.validationScore,
+    reflectionRetryRecommended: lastOutcome.retryRecommended,
+    stageResults: [...upfrontResults, ...iterations.flatMap((it) => it.stages)],
+    stdoutEntries: [...upfrontResults, ...iterations.flatMap((it) => it.stages)].map((stage) => ({ stage: stage.name, text: stage.stdout })),
+    stderrEntries: [...upfrontResults, ...iterations.flatMap((it) => it.stages)].map((stage) => ({ stage: stage.name, text: stage.stderr })),
+  });
+  if (deps && deps.onStageEvent) deps.onStageEvent({ phase: "end", stage: HISTORY_STAGE, result: historyResult });
+  stages.push(historyResult);
+
   for (const stage of FINAL_STAGES) {
     if (!approved || stopped) {
       stages.push(skipStage(stage, deps));
@@ -264,8 +342,8 @@ function runOrchestration(deps) {
 
   const finishTime = new Date().toISOString();
   const durationMs = Date.now() - startedAt;
-  const status = stages.every((stage) => stage.status === "PASS") ? "success" : "failed";
-  return { startTime, finishTime, durationMs, status, stages, iterations, maxIterations: maxIter, iterationsUsed };
+  const status = stages.every((stage) => stage.status === "PASS" || stage.status === "WARN") ? "success" : "failed";
+  return { startTime, finishTime, durationMs, status, stages, iterations, maxIterations: maxIter, iterationsUsed, runHistory: historyResult.runHistory };
 }
 
 /**
@@ -291,7 +369,7 @@ function buildRunId(startTime) {
 
 /**
  * Builds the complete run record from an already-computed orchestration result.
- * @param {{startTime: string, finishTime: string, durationMs: number, status: string, stages: object[], iterations: object[], maxIterations: number, iterationsUsed: number}} orchestrationResult
+ * @param {{startTime: string, finishTime: string, durationMs: number, status: string, stages: object[], iterations: object[], maxIterations: number, iterationsUsed: number, runHistory: (object|null)}} orchestrationResult
  * @param {string} [baseDir] defaults to the repository root; used by tests running against a temp fixture
  * @returns {object} matching run.json's shape
  */
@@ -306,6 +384,7 @@ function buildRunRecord(orchestrationResult, baseDir) {
     maxIterations: orchestrationResult.maxIterations,
     iterationsUsed: orchestrationResult.iterationsUsed,
     iterations: orchestrationResult.iterations,
+    runHistory: orchestrationResult.runHistory,
     artifactsProduced: findArtifactsProduced(baseDir),
     timestamp: new Date().toISOString(),
   };
@@ -367,6 +446,12 @@ function renderMarkdown(run) {
       lines.push("```", failed.stderr, "```", "");
     }
   }
+
+  lines.push("## Run History", "");
+  lines.push(
+    run.runHistory ? `Archived to \`${path.relative(root, run.runHistory.runDir)}\` (run id \`${run.runHistory.runId}\`, ${run.runHistory.archivedFiles.length} artifact(s)).` : "History generation failed; no archive was created for this run.",
+    ""
+  );
 
   lines.push("## Artifacts Produced", "");
   (run.artifactsProduced.length ? run.artifactsProduced : ["None"]).forEach((artifact) => lines.push(`- \`${artifact}\``));
@@ -443,10 +528,12 @@ module.exports = {
   DEFAULT_MAX_ITERATIONS,
   UPFRONT_STAGES,
   LOOP_STAGES,
+  HISTORY_STAGE,
   FINAL_STAGES,
   STAGES,
   KNOWN_ARTIFACTS,
   runStage,
+  runHistoryStage,
   runOrchestration,
   defaultReadIterationOutcome,
   findArtifactsProduced,

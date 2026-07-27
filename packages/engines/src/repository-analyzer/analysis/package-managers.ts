@@ -6,6 +6,7 @@
 
 import type { WalkedFile } from "./walk";
 import type { Detection } from "./types";
+import { makeId } from "./identity";
 
 function basename(relPath: string): string {
   return relPath.split("/").pop() ?? relPath;
@@ -45,10 +46,13 @@ export function detectPackageManagers(files: ReadonlyArray<WalkedFile>): Detecti
   for (const [label, filesFound] of byLabel.entries()) {
     const sorted = [...filesFound].sort();
     detections.push({
+      id: makeId("package-manager", label),
+      kind: "package-manager",
       value: label,
       confidence: "High",
       evidence: sorted.map((file) => `${file} present`),
       sourceFiles: sorted,
+      sourceDetectionIds: [],
     });
   }
 
@@ -58,10 +62,13 @@ export function detectPackageManagers(files: ReadonlyArray<WalkedFile>): Detecti
     const requirementsFiles = files.filter((f) => /(^|\/)requirements(-[\w.]+)?\.txt$/.test(f.relPath)).map((f) => f.relPath).sort();
     if (requirementsFiles.length > 0) {
       detections.push({
+        id: makeId("package-manager", "pip"),
+        kind: "package-manager",
         value: "pip",
         confidence: "Medium",
         evidence: requirementsFiles.map((file) => `${file} present (no lockfile)`),
         sourceFiles: requirementsFiles,
+        sourceDetectionIds: [],
       });
     }
   }

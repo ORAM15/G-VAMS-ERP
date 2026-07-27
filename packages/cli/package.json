@@ -11,7 +11,8 @@
     "oram": "./dist/bin.js"
   },
   "dependencies": {
-    "@oram/runtime": "workspace:*"
+    "@oram/runtime": "workspace:*",
+    "@oram/engines": "workspace:*"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

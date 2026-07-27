@@ -3,10 +3,15 @@
  * manifest that declared it -- a dependency declared in packages/pkg-a/package.json is attributed to the
  * "packages/pkg-a" subsystem; a dependency declared in a single, repository-root package.json (the common
  * single-package case) has no one subsystem that owns it, so it is attributed to the repository as a whole
- * (`repositoryLabel`, the project name) instead of being falsely pinned to an arbitrary subdirectory.
+ * instead of being falsely pinned to an arbitrary subdirectory.
+ *
+ * `from` is namespaced ("subsystem:<path>" vs "repository:<projectName>") so the two cases can never be
+ * confused for each other, or for an arbitrary label, by a reader with no other context -- see this
+ * package's own IDENTITY PRESERVATION note in ./types.ts.
  */
 
 import type { RepositoryAnalysis, Detection } from "../../repository-analyzer/analysis/types";
+import { slugify } from "../../repository-analyzer/analysis/identity";
 import type { SubsystemBase } from "./subsystems";
 import type { DependencyRelationship, DependencyRelationshipKind } from "./types";
 
@@ -34,9 +39,10 @@ function findOwningSubsystem(manifestPath: string, subsystems: ReadonlyArray<Sub
 export function detectDependencyRelationships(
   analysis: RepositoryAnalysis,
   subsystems: ReadonlyArray<SubsystemBase>,
-  repositoryLabel: string
+  projectName: string
 ): DependencyRelationship[] {
   const relationships: DependencyRelationship[] = [];
+  const repositoryId = `repository:${projectName}`;
   const categorized: ReadonlyArray<[string, ReadonlyArray<Detection<string>>]> = [
     ["framework", analysis.frameworks],
     ["api-framework", analysis.apiFrameworks],
@@ -50,19 +56,22 @@ export function detectDependencyRelationships(
 
   for (const [category, detections] of categorized) {
     for (const detection of detections) {
+      const kind = CATEGORY_KIND[category]!;
       const filesByOwner = new Map<string, string[]>();
       for (const file of detection.sourceFiles) {
         const owner = findOwningSubsystem(file, subsystems);
-        const ownerLabel = owner ? owner.name : repositoryLabel;
-        const files = filesByOwner.get(ownerLabel) ?? [];
+        const ownerId = owner ? owner.id : repositoryId;
+        const files = filesByOwner.get(ownerId) ?? [];
         files.push(file);
-        filesByOwner.set(ownerLabel, files);
+        filesByOwner.set(ownerId, files);
       }
-      for (const [ownerLabel, files] of filesByOwner.entries()) {
+      for (const [from, files] of filesByOwner.entries()) {
         relationships.push({
-          from: ownerLabel,
+          id: `relationship:${slugify(from)}-${slugify(detection.value)}-${kind}`,
+          from,
           to: detection.value,
-          kind: CATEGORY_KIND[category]!,
+          toId: detection.id,
+          kind,
           evidence: files,
           confidence: detection.confidence,
         });

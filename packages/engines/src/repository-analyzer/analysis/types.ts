@@ -10,6 +10,15 @@
  * plural fields (frameworks, databases, etc.), "nothing found" is an empty array, not a fabricated "Unknown"
  * entry -- an empty list already communicates "none detected" honestly.
  *
+ * IDENTITY PRESERVATION (Capability Sprint 1 addendum) -- every Detection now carries a stable `id` (see
+ * ../analysis/identity.ts's makeId(kind, value): deterministic, collision-free across kinds, reproducible
+ * across repeated runs of the same repository) and an explicit `kind` (previously only implicit in which
+ * array a Detection happened to live in). `sourceDetectionIds` lets a Detection that was derived FROM other
+ * Detections (as Engineering Knowledge's rule-based findings are) reference them by id rather than only
+ * their rendered evidence text -- this is deliberately NOT a graph: there is no store, no id-resolution
+ * helper, no traversal API here. It is the minimum each object needs to be referenced by id later without a
+ * rewrite, nothing more.
+ *
  * Deliberately NOT a rewrite of LegacyRepositoryAnalysis (./types.ts, wrapping scripts/repository-
  * intelligence.js) -- that type and its adapter are untouched and still valid. This is a new, independent,
  * repository-agnostic analysis produced by a new engine (../RepositoryAnalyzerEngine.ts), generic across any
@@ -20,22 +29,32 @@ export type Confidence = "High" | "Medium" | "Low";
 
 /** One evidence-backed detection. `value` is the detected fact itself (e.g. "React", true, "Unknown"). */
 export interface Detection<T> {
+  /** Stable, deterministic identity -- see ./identity.ts's makeId(kind, value). Reproducible across runs of the same repository; never a random/session-scoped id. */
+  readonly id: string;
+  /** Explicit category this Detection belongs to (e.g. "framework", "database", "monorepo") -- previously only implicit in which RepositoryAnalysis field held it. */
+  readonly kind: string;
   readonly value: T;
   readonly confidence: Confidence;
   /** Human-readable evidence descriptions, e.g. "package.json dependencies", "Dockerfile present". */
   readonly evidence: ReadonlyArray<string>;
   /** Repository-relative paths that back this detection. */
   readonly sourceFiles: ReadonlyArray<string>;
+  /** ids of other Detections this one was derived FROM, if any (empty for Detections derived directly from raw files/manifests, as every RepositoryAnalysis Detection is). */
+  readonly sourceDetectionIds: ReadonlyArray<string>;
 }
 
 export interface LanguageEntry {
+  readonly id: string;
   readonly language: string;
   readonly fileCount: number;
 }
 
 export interface DependencyManifestSummary {
+  readonly id: string;
   readonly path: string;
   readonly ecosystem: string;
+  /** The actual declared dependency names -- previously discarded, collapsed to only `dependencyCount`. Kept alongside the count rather than replacing it, since the count remains a convenient, correct-by-construction cache of `dependencyNames.length`. */
+  readonly dependencyNames: ReadonlyArray<string>;
   readonly dependencyCount: number;
 }
 
@@ -44,8 +63,12 @@ export interface DependencySummary {
   readonly manifests: ReadonlyArray<DependencyManifestSummary>;
 }
 
-/** `role` is a naming-convention-based categorization, not an assertion about the directory's real purpose. */
+/**
+ * `role` is a naming-convention-based categorization, not an assertion about the directory's real purpose --
+ * `confidence` makes that honest instead of presenting a guess as fact (previously absent entirely).
+ */
 export interface RepositoryStructureEntry {
+  readonly id: string;
   readonly path: string;
   readonly role:
     | "source"
@@ -57,6 +80,7 @@ export interface RepositoryStructureEntry {
     | "config"
     | "package"
     | "unknown";
+  readonly confidence: Confidence;
 }
 
 export interface RepositoryAnalysis {

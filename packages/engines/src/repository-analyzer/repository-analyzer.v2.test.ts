@@ -44,12 +44,23 @@ function labels(detections: ReadonlyArray<Detection<string>>): Set<string> {
 
 /** Every Detection must carry well-formed metadata -- the contract this whole feature is built on. */
 function assertWellFormedDetection<T>(detection: Detection<T>): void {
+  assert.equal(typeof detection.id, "string");
+  assert.ok(detection.id.length > 0, "expected a non-empty stable id");
+  assert.equal(typeof detection.kind, "string");
+  assert.ok(detection.kind.length > 0, "expected a non-empty kind");
   assert.ok(["High", "Medium", "Low"].includes(detection.confidence), `expected a valid confidence, got "${detection.confidence}"`);
   assert.ok(Array.isArray(detection.evidence));
   assert.ok(Array.isArray(detection.sourceFiles));
+  assert.ok(Array.isArray(detection.sourceDetectionIds));
   if (detection.confidence !== "Low") {
     assert.ok(detection.evidence.length > 0, "non-Low-confidence detections must carry evidence");
   }
+}
+
+/** Every id in an array must be unique -- the whole point of "stable identity" collapses if two different facts can share one id. */
+function assertUniqueIds(detections: ReadonlyArray<{ id: string }>): void {
+  const ids = detections.map((d) => d.id);
+  assert.deepEqual(ids, [...new Set(ids)], "expected every id in this array to be unique");
 }
 
 test("web-app fixture: full-stack Node/React/Express app is detected with rich, evidence-backed metadata", () => {
@@ -63,6 +74,7 @@ test("web-app fixture: full-stack Node/React/Express app is detected with rich, 
   assert.equal(analysis.primaryLanguages[0]?.confidence, "High");
 
   assert.deepEqual(labels(analysis.frameworks), new Set(["React", "React DOM"]));
+  assert.ok(analysis.frameworks.some((d) => d.id === "framework:react" && d.kind === "framework"));
   assert.deepEqual(labels(analysis.apiFrameworks), new Set(["Express"]));
   assert.deepEqual(labels(analysis.buildTools), new Set(["TypeScript", "Webpack"]));
   assert.deepEqual(labels(analysis.testingFrameworks), new Set(["Jest"]));
@@ -86,14 +98,22 @@ test("web-app fixture: full-stack Node/React/Express app is detected with rich, 
 
   assert.equal(analysis.monorepo.value, false);
 
+  // Explicit package.json "main" field and the conventional-filename match now coincide on the same path --
+  // exactly one entry, not two colliding on the same id (previously a disclosed, unfixed duplicate).
+  assert.equal(analysis.entryPoints.length, 1);
   assert.ok(analysis.entryPoints.some((e) => e.value === "src/index.js" && e.confidence === "High"));
-  assert.ok(analysis.repositoryStructure.some((e) => e.path === "src" && e.role === "source"));
-  assert.ok(analysis.repositoryStructure.some((e) => e.path === ".github" && e.role === "ci"));
+  assert.ok(analysis.repositoryStructure.some((e) => e.path === "src" && e.role === "source" && e.confidence === "Medium"));
+  assert.ok(analysis.repositoryStructure.some((e) => e.path === ".github" && e.role === "ci" && e.confidence === "Medium"));
 
   assert.equal(analysis.fileCount, 15);
   assert.equal(analysis.dependencySummary.totalDependencies, 11);
   assert.equal(analysis.dependencySummary.manifests.length, 1);
   assert.equal(analysis.dependencySummary.manifests[0]?.ecosystem, "npm");
+  assert.equal(analysis.dependencySummary.manifests[0]?.id, "manifest:package-json");
+  assert.deepEqual(
+    new Set(analysis.dependencySummary.manifests[0]?.dependencyNames),
+    new Set(["react", "react-dom", "express", "mongoose", "jsonwebtoken", "bcrypt", "openai", "@aws-sdk/client-s3", "jest", "typescript", "webpack"])
+  );
 
   // Every non-empty Detection array must be well-formed, not just the ones asserted above by value.
   for (const detection of [
@@ -112,6 +132,8 @@ test("web-app fixture: full-stack Node/React/Express app is detected with rich, 
   ]) {
     assertWellFormedDetection(detection);
   }
+  assertUniqueIds(analysis.entryPoints);
+  assertUniqueIds([...analysis.frameworks, ...analysis.databaseTechnologies, ...analysis.authenticationLibraries]);
 });
 
 test("clean-architecture fixture: src/domain + src/application + src/infrastructure is detected as Clean/Hexagonal Architecture", () => {
@@ -210,6 +232,22 @@ test("minimal fixture: no evidence anywhere yields honest Unknown/empty results,
   assert.deepEqual(analysis.dependencySummary.manifests, []);
 });
 
+test("identity is deterministic: analyzing the same fixture twice produces byte-identical ids", () => {
+  const first = fixture("web-app");
+  const second = fixture("web-app");
+
+  assert.deepEqual(
+    first.frameworks.map((d) => d.id).sort(),
+    second.frameworks.map((d) => d.id).sort()
+  );
+  assert.equal(first.projectType.id, second.projectType.id);
+  assert.equal(first.docker.id, second.docker.id);
+  assert.deepEqual(
+    first.repositoryStructure.map((e) => e.id).sort(),
+    second.repositoryStructure.map((e) => e.id).sort()
+  );
+});
+
 test("smoke test: buildRepositoryAnalysis() runs against this actual repository without crashing", () => {
   const repoRoot = findRepositoryRoot(import.meta.dirname);
   const analysis = buildRepositoryAnalysis(repoRoot);
@@ -223,4 +261,8 @@ test("smoke test: buildRepositoryAnalysis() runs against this actual repository 
   for (const detection of [...analysis.frameworks, ...analysis.buildTools, ...analysis.packageManagers, analysis.projectType, analysis.docker]) {
     assertWellFormedDetection(detection);
   }
+  assertUniqueIds([...analysis.frameworks, ...analysis.buildTools, ...analysis.packageManagers]);
+  assertUniqueIds(analysis.entryPoints);
+  assertUniqueIds(analysis.repositoryStructure);
+  assertUniqueIds(analysis.dependencySummary.manifests);
 });

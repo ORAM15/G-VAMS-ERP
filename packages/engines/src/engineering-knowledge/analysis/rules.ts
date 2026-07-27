@@ -1,8 +1,13 @@
 /**
  * Deterministic rule tables for architecturalStrengths / architecturalRisks / technicalDebtAreas /
- * missingEngineeringPractices. Each rule is a pure function of RepositoryAnalysis returning a Detection<string>
- * (or null if its condition doesn't hold) -- every rule's evidence/sourceFiles/confidence trace back to
- * fields RepositoryAnalysis already computed, never a new filesystem read.
+ * missingEngineeringPractices. Each rule is a pure function of RepositoryAnalysis returning a partial
+ * Detection<string> (or null if its condition doesn't hold) -- every rule's evidence/sourceFiles/confidence
+ * trace back to fields RepositoryAnalysis already computed, never a new filesystem read. `id`/`kind` are
+ * injected uniformly by runRules() below (one `kind` per table), not repeated in every rule.
+ *
+ * `sourceDetectionIds` records exactly which RepositoryAnalysis Detections triggered each finding -- these
+ * conclusions are derived FROM other Detections, unlike RepositoryAnalysis's own base Detections (which are
+ * derived from raw files/manifests, correctly represented by sourceFiles alone).
  *
  * Rules deliberately excluded, and why:
  *   - "2+ database technologies detected" was considered and dropped: an ORM (e.g. SQLAlchemy, Prisma) very
@@ -12,17 +17,21 @@
  */
 
 import type { RepositoryAnalysis, Detection } from "../../repository-analyzer/analysis/types";
+import { makeId } from "../../repository-analyzer/analysis/identity";
 
-type Rule = (analysis: RepositoryAnalysis) => Detection<string> | null;
+type RuleResult = Omit<Detection<string>, "id" | "kind">;
+type Rule = (analysis: RepositoryAnalysis) => RuleResult | null;
 
-function evidenceFrom(detections: ReadonlyArray<Detection<unknown>>): { evidence: string[]; sourceFiles: string[] } {
+function evidenceFrom(detections: ReadonlyArray<Detection<unknown>>): { evidence: string[]; sourceFiles: string[]; sourceDetectionIds: string[] } {
   const evidence: string[] = [];
   const sourceFiles: string[] = [];
+  const sourceDetectionIds: string[] = [];
   for (const detection of detections) {
     evidence.push(...detection.evidence);
     sourceFiles.push(...detection.sourceFiles);
+    sourceDetectionIds.push(detection.id);
   }
-  return { evidence: [...new Set(evidence)], sourceFiles: [...new Set(sourceFiles)] };
+  return { evidence: [...new Set(evidence)], sourceFiles: [...new Set(sourceFiles)], sourceDetectionIds: [...new Set(sourceDetectionIds)] };
 }
 
 const ORM_PATTERN = /ORM|ODM|Prisma|SQLAlchemy|Sequelize|TypeORM|Drizzle|Knex|Mongoose/i;
@@ -38,7 +47,13 @@ const STRENGTH_RULES: ReadonlyArray<Rule> = [
       : null,
   (a) =>
     a.docker.value
-      ? { value: "Containerization (Docker) supports reproducible builds/deployments.", confidence: a.docker.confidence, evidence: a.docker.evidence, sourceFiles: a.docker.sourceFiles }
+      ? {
+          value: "Containerization (Docker) supports reproducible builds/deployments.",
+          confidence: a.docker.confidence,
+          evidence: a.docker.evidence,
+          sourceFiles: a.docker.sourceFiles,
+          sourceDetectionIds: [a.docker.id],
+        }
       : null,
   (a) =>
     a.primaryLanguages.some((entry) => entry.value === "TypeScript")
@@ -57,7 +72,13 @@ const STRENGTH_RULES: ReadonlyArray<Rule> = [
   (a) => {
     const pattern = a.architecturalPatterns.find((p) => p.value !== "Unknown" && p.confidence === "High");
     return pattern
-      ? { value: `A recognizable architectural pattern was detected (${pattern.value}), suggesting intentional structural organization.`, confidence: "High", evidence: pattern.evidence, sourceFiles: pattern.sourceFiles }
+      ? {
+          value: `A recognizable architectural pattern was detected (${pattern.value}), suggesting intentional structural organization.`,
+          confidence: "High",
+          evidence: pattern.evidence,
+          sourceFiles: pattern.sourceFiles,
+          sourceDetectionIds: [pattern.id],
+        }
       : null;
   },
   (a) =>
@@ -90,6 +111,7 @@ const RISK_RULES: ReadonlyArray<Rule> = [
           confidence: "Medium",
           evidence: a.monorepo.evidence,
           sourceFiles: a.monorepo.sourceFiles,
+          sourceDetectionIds: [a.monorepo.id],
         }
       : null,
 ];
@@ -104,6 +126,7 @@ const DEBT_RULES: ReadonlyArray<Rule> = [
           confidence: "Medium",
           evidence: [`${npmManifest.path} present, no npm/yarn/pnpm/bun lockfile detected`],
           sourceFiles: [npmManifest.path],
+          sourceDetectionIds: [],
         }
       : null;
   },
@@ -116,6 +139,7 @@ const DEBT_RULES: ReadonlyArray<Rule> = [
           confidence: "Low",
           evidence: [`${pipManifest.path} present, no poetry.lock/Pipfile.lock detected`],
           sourceFiles: [pipManifest.path],
+          sourceDetectionIds: [],
         }
       : null;
   },
@@ -124,19 +148,28 @@ const DEBT_RULES: ReadonlyArray<Rule> = [
 const MISSING_PRACTICE_RULES: ReadonlyArray<Rule> = [
   (a) =>
     a.testingFrameworks.length === 0
-      ? { value: "No automated testing framework was detected.", confidence: "Medium", evidence: ["no recognized test-framework dependency found"], sourceFiles: [] }
+      ? { value: "No automated testing framework was detected.", confidence: "Medium", evidence: ["no recognized test-framework dependency found"], sourceFiles: [], sourceDetectionIds: [] }
       : null,
-  (a) => (a.ciCdSystems.length === 0 ? { value: "No CI/CD configuration was detected.", confidence: "Medium", evidence: ["no recognized CI/CD file found"], sourceFiles: [] } : null),
+  (a) =>
+    a.ciCdSystems.length === 0
+      ? { value: "No CI/CD configuration was detected.", confidence: "Medium", evidence: ["no recognized CI/CD file found"], sourceFiles: [], sourceDetectionIds: [] }
+      : null,
   (a) => {
     const isJsOrTs = a.primaryLanguages.some((entry) => entry.value === "JavaScript" || entry.value === "TypeScript");
     const hasEslint = a.configurationFiles.some((d) => d.value === "ESLint config");
     return isJsOrTs && !hasEslint
-      ? { value: "No ESLint configuration was detected for this JavaScript/TypeScript codebase.", confidence: "Medium", evidence: ["no .eslintrc*/eslint config file found"], sourceFiles: [] }
+      ? {
+          value: "No ESLint configuration was detected for this JavaScript/TypeScript codebase.",
+          confidence: "Medium",
+          evidence: ["no .eslintrc*/eslint config file found"],
+          sourceFiles: [],
+          sourceDetectionIds: [],
+        }
       : null;
   },
   (a) =>
     a.entryPoints.length === 0
-      ? { value: "No entry point was detected (no package.json main/bin field, no conventional entry filename).", confidence: "Low", evidence: [], sourceFiles: [] }
+      ? { value: "No entry point was detected (no package.json main/bin field, no conventional entry filename).", confidence: "Low", evidence: [], sourceFiles: [], sourceDetectionIds: [] }
       : null,
   (a) => {
     const hasSensitiveTech = a.databaseTechnologies.length > 0 || a.authenticationLibraries.length > 0;
@@ -147,29 +180,30 @@ const MISSING_PRACTICE_RULES: ReadonlyArray<Rule> = [
           confidence: "Low",
           evidence: [],
           sourceFiles: [],
+          sourceDetectionIds: [],
         }
       : null;
   },
 ];
 
-function runRules(rules: ReadonlyArray<Rule>, analysis: RepositoryAnalysis): Detection<string>[] {
+function runRules(rules: ReadonlyArray<Rule>, analysis: RepositoryAnalysis, kind: string): Detection<string>[] {
   const results: Detection<string>[] = [];
   for (const rule of rules) {
     const result = rule(analysis);
-    if (result) results.push(result);
+    if (result) results.push({ id: makeId(kind, result.value), kind, ...result });
   }
   return results;
 }
 
 export function detectArchitecturalStrengths(analysis: RepositoryAnalysis): Detection<string>[] {
-  return runRules(STRENGTH_RULES, analysis);
+  return runRules(STRENGTH_RULES, analysis, "architectural-strength");
 }
 export function detectArchitecturalRisks(analysis: RepositoryAnalysis): Detection<string>[] {
-  return runRules(RISK_RULES, analysis);
+  return runRules(RISK_RULES, analysis, "architectural-risk");
 }
 export function detectTechnicalDebtAreas(analysis: RepositoryAnalysis): Detection<string>[] {
-  return runRules(DEBT_RULES, analysis);
+  return runRules(DEBT_RULES, analysis, "technical-debt");
 }
 export function detectMissingEngineeringPractices(analysis: RepositoryAnalysis): Detection<string>[] {
-  return runRules(MISSING_PRACTICE_RULES, analysis);
+  return runRules(MISSING_PRACTICE_RULES, analysis, "missing-engineering-practice");
 }

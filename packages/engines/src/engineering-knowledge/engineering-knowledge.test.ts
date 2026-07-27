@@ -1,8 +1,11 @@
 /**
- * Regression coverage for Engineering Knowledge v2 (Capability Sprint 1, Phase 2). Reuses the repository-
- * analyzer package's own fixtures (../repository-analyzer/__fixtures__/) rather than duplicating them --
- * buildEngineeringKnowledge() is a pure transform of a RepositoryAnalysis, so those fixtures already give
- * precise, hand-computed inputs to assert against.
+ * Regression coverage for Engineering Knowledge v2 (Capability Sprint 1, Phase 2), including the Identity
+ * Preservation milestone: every Detection/Subsystem/DependencyRelationship carries a stable id, and
+ * relationships are referenced by id rather than flattened into bare label arrays.
+ *
+ * Reuses the repository-analyzer package's own fixtures (../repository-analyzer/__fixtures__/) rather than
+ * duplicating them -- buildEngineeringKnowledge() is a pure transform of a RepositoryAnalysis, so those
+ * fixtures already give precise, hand-computed inputs to assert against.
  *
  * Run with: node --import tsx --test packages/engines/src/engineering-knowledge/engineering-knowledge.test.ts
  */
@@ -12,7 +15,7 @@ import { existsSync } from "node:fs";
 import * as path from "node:path";
 import { buildRepositoryAnalysis } from "../repository-analyzer/analysis/build-analysis";
 import { buildEngineeringKnowledge } from "./analysis/build-knowledge";
-import type { Detection } from "../repository-analyzer/analysis/types";
+import type { Detection, RepositoryAnalysis } from "../repository-analyzer/analysis/types";
 import type { EngineeringKnowledge } from "./analysis/types";
 
 const FIXTURES_ROOT = path.join(import.meta.dirname, "..", "repository-analyzer", "__fixtures__");
@@ -29,9 +32,9 @@ function findRepositoryRoot(startDir: string): string {
   throw new Error(`Could not find a repository root containing scripts/repository-intelligence.js above ${startDir}.`);
 }
 
-function knowledgeFor(fixtureName: string): EngineeringKnowledge {
+function analyze(fixtureName: string): { analysis: RepositoryAnalysis; knowledge: EngineeringKnowledge } {
   const analysis = buildRepositoryAnalysis(path.join(FIXTURES_ROOT, fixtureName));
-  return buildEngineeringKnowledge(analysis);
+  return { analysis, knowledge: buildEngineeringKnowledge(analysis) };
 }
 
 function values(detections: ReadonlyArray<Detection<string>>): Set<string> {
@@ -39,29 +42,73 @@ function values(detections: ReadonlyArray<Detection<string>>): Set<string> {
 }
 
 function assertWellFormedDetection<T>(detection: Detection<T>): void {
+  assert.equal(typeof detection.id, "string");
+  assert.ok(detection.id.length > 0);
+  assert.equal(typeof detection.kind, "string");
+  assert.ok(detection.kind.length > 0);
   assert.ok(["High", "Medium", "Low"].includes(detection.confidence));
   assert.ok(Array.isArray(detection.evidence));
   assert.ok(Array.isArray(detection.sourceFiles));
+  assert.ok(Array.isArray(detection.sourceDetectionIds));
+}
+
+/** Every id in an array must be unique -- the whole point of "stable identity" collapses if two different facts can share one id. */
+function assertUniqueIds(detections: ReadonlyArray<{ id: string }>): void {
+  const ids = detections.map((d) => d.id);
+  assert.deepEqual(ids, [...new Set(ids)], "expected every id in this array to be unique");
+}
+
+/** Collects every Detection id that exists anywhere in a RepositoryAnalysis, for dangling-reference checks. */
+function allDetectionIds(analysis: RepositoryAnalysis): Set<string> {
+  const ids = new Set<string>();
+  const collect = (detections: ReadonlyArray<Detection<unknown>>) => detections.forEach((d) => ids.add(d.id));
+  ids.add(analysis.projectType.id);
+  collect(analysis.primaryLanguages);
+  collect(analysis.frameworks);
+  collect(analysis.apiFrameworks);
+  collect(analysis.packageManagers);
+  collect(analysis.buildTools);
+  collect(analysis.testingFrameworks);
+  collect(analysis.entryPoints);
+  collect(analysis.configurationFiles);
+  collect(analysis.architecturalPatterns);
+  ids.add(analysis.monorepo.id);
+  collect(analysis.environmentFiles);
+  collect(analysis.ciCdSystems);
+  ids.add(analysis.docker.id);
+  collect(analysis.infrastructureFiles);
+  collect(analysis.databaseTechnologies);
+  collect(analysis.authenticationLibraries);
+  collect(analysis.aiLlmLibraries);
+  collect(analysis.cloudProviders);
+  collect(analysis.deploymentTargets);
+  return ids;
 }
 
 test("web-app fixture: single-package repo attributes all technologies to the project, not to `src`", () => {
-  const knowledge = knowledgeFor("web-app");
+  const { analysis, knowledge } = analyze("web-app");
 
   assert.equal(knowledge.subsystems.length, 1);
   const src = knowledge.subsystems[0]!;
+  assert.equal(src.id, "subsystem:src");
   assert.equal(src.path, "src");
   assert.equal(src.role, "source");
-  assert.deepEqual(src.relatedFrameworks, []);
-  assert.deepEqual(src.relatedTechnologies, []);
-  assert.equal(src.confidence, "Low");
+  assert.deepEqual(src.relationshipIds, []);
+  // "Medium": a naming-convention match ("src") -- structural identification confidence, no longer conflated
+  // with "how many relationships does this subsystem happen to own" (0, honestly visible via relationshipIds).
+  assert.equal(src.confidence, "Medium");
+  assert.deepEqual(src.evidence, ["src"]);
 
   assert.equal(knowledge.dependencyRelationships.length, 11);
-  assert.ok(knowledge.dependencyRelationships.every((r) => r.from === "demo-web-app"));
-  assert.ok(knowledge.dependencyRelationships.some((r) => r.to === "React" && r.kind === "uses-framework"));
+  assert.ok(knowledge.dependencyRelationships.every((r) => r.from === "repository:demo-web-app"));
+  const reactRelationship = knowledge.dependencyRelationships.find((r) => r.to === "React" && r.kind === "uses-framework");
+  assert.ok(reactRelationship);
+  assert.equal(reactRelationship!.toId, "framework:react");
   assert.ok(knowledge.dependencyRelationships.some((r) => r.to === "Express" && r.kind === "uses-api-framework"));
 
   assert.equal(knowledge.architectureSummary.value, "demo-web-app is a Full-stack web application. Primary language(s): JavaScript. Likely MVC (Model-View-Controller). 1 subsystem(s) were identified.");
   assert.equal(knowledge.architectureSummary.confidence, "High");
+  assert.ok(knowledge.architectureSummary.sourceDetectionIds.includes(analysis.projectType.id));
 
   assert.equal(knowledge.technologyStackNarrative.confidence, "High");
   assert.ok(knowledge.technologyStackNarrative.value.includes("Frameworks: React"));
@@ -78,24 +125,44 @@ test("web-app fixture: single-package repo attributes all technologies to the pr
   assert.deepEqual(knowledge.technicalDebtAreas, []);
   assert.deepEqual(knowledge.missingEngineeringPractices, []);
 
+  // Identity checks: unique ids, no dangling references.
+  assertUniqueIds(knowledge.subsystems);
+  assertUniqueIds(knowledge.dependencyRelationships);
+  const knownDetectionIds = allDetectionIds(analysis);
+  for (const relationship of knowledge.dependencyRelationships) {
+    assert.ok(knownDetectionIds.has(relationship.toId), `relationship.toId "${relationship.toId}" must reference a real RepositoryAnalysis Detection`);
+  }
+  for (const subsystem of knowledge.subsystems) {
+    for (const relationshipId of subsystem.relationshipIds) {
+      assert.ok(
+        knowledge.dependencyRelationships.some((r) => r.id === relationshipId),
+        `subsystem.relationshipIds entry "${relationshipId}" must reference a real relationship`
+      );
+    }
+  }
+
   for (const detection of [knowledge.architectureSummary, knowledge.technologyStackNarrative, ...knowledge.architecturalStrengths]) {
     assertWellFormedDetection(detection);
   }
   for (const relationship of knowledge.dependencyRelationships) {
+    assert.equal(typeof relationship.id, "string");
+    assert.ok(relationship.id.length > 0);
     assert.ok(["High", "Medium", "Low"].includes(relationship.confidence));
     assert.ok(Array.isArray(relationship.evidence));
   }
 });
 
 test("clean-architecture fixture: TypeScript + Clean Architecture strengths, missing testing/CI/lint flagged", () => {
-  const knowledge = knowledgeFor("clean-architecture");
+  const { knowledge } = analyze("clean-architecture");
 
   assert.equal(knowledge.subsystems.length, 1);
   assert.equal(knowledge.subsystems[0]!.path, "src");
+  assert.equal(knowledge.subsystems[0]!.confidence, "Medium");
 
   assert.equal(knowledge.dependencyRelationships.length, 1);
   assert.equal(knowledge.dependencyRelationships[0]?.to, "TypeScript");
-  assert.equal(knowledge.dependencyRelationships[0]?.from, "demo-clean-architecture");
+  assert.equal(knowledge.dependencyRelationships[0]?.from, "repository:demo-clean-architecture");
+  assert.equal(knowledge.dependencyRelationships[0]?.toId, "build-tool:typescript");
 
   assert.deepEqual(values(knowledge.architecturalStrengths), new Set([
     "Static typing (TypeScript) is used, reducing a class of runtime errors.",
@@ -113,13 +180,13 @@ test("clean-architecture fixture: TypeScript + Clean Architecture strengths, mis
 });
 
 test("python-fastapi fixture: pip ecosystem produces FastAPI/SQLAlchemy strengths, missing CI/env flagged, no false ESLint claim", () => {
-  const knowledge = knowledgeFor("python-fastapi");
+  const { knowledge } = analyze("python-fastapi");
 
   // No directories in this fixture at all -- honestly zero subsystems, not a guess.
   assert.deepEqual(knowledge.subsystems, []);
 
   assert.equal(knowledge.dependencyRelationships.length, 6);
-  assert.ok(knowledge.dependencyRelationships.every((r) => r.from === "python-fastapi"));
+  assert.ok(knowledge.dependencyRelationships.every((r) => r.from === "repository:python-fastapi"));
 
   assert.deepEqual(values(knowledge.architecturalStrengths), new Set([
     "Automated testing is configured (pytest).",
@@ -141,19 +208,28 @@ test("python-fastapi fixture: pip ecosystem produces FastAPI/SQLAlchemy strength
 });
 
 test("monorepo fixture: package.json-per-workspace attributes React/Express to their own package, not the repo", () => {
-  const knowledge = knowledgeFor("monorepo");
+  const { knowledge } = analyze("monorepo");
 
   assert.equal(knowledge.subsystems.length, 2);
   const pkgA = knowledge.subsystems.find((s) => s.path === "packages/pkg-a");
   const pkgB = knowledge.subsystems.find((s) => s.path === "packages/pkg-b");
   assert.ok(pkgA && pkgB);
-  assert.deepEqual(pkgA!.relatedFrameworks, ["React"]);
-  assert.equal(pkgA!.confidence, "High");
-  assert.deepEqual(pkgB!.relatedFrameworks, ["Express"]);
+  assert.equal(pkgA!.id, "subsystem:packages-pkg-a");
+  assert.equal(pkgA!.confidence, "High"); // structural inference (child of a "package"-role directory), not a naming guess
+  assert.equal(pkgA!.relationshipIds.length, 1);
+  assert.equal(pkgB!.relationshipIds.length, 1);
+
+  const reactRelationshipId = pkgA!.relationshipIds[0]!;
+  const reactRelationship = knowledge.dependencyRelationships.find((r) => r.id === reactRelationshipId);
+  assert.equal(reactRelationship?.to, "React");
+
+  const expressRelationshipId = pkgB!.relationshipIds[0]!;
+  const expressRelationship = knowledge.dependencyRelationships.find((r) => r.id === expressRelationshipId);
+  assert.equal(expressRelationship?.to, "Express");
 
   assert.equal(knowledge.dependencyRelationships.length, 2);
-  assert.ok(knowledge.dependencyRelationships.some((r) => r.from === "packages/pkg-a" && r.to === "React"));
-  assert.ok(knowledge.dependencyRelationships.some((r) => r.from === "packages/pkg-b" && r.to === "Express"));
+  assert.ok(knowledge.dependencyRelationships.some((r) => r.from === "subsystem:packages-pkg-a" && r.to === "React"));
+  assert.ok(knowledge.dependencyRelationships.some((r) => r.from === "subsystem:packages-pkg-b" && r.to === "Express"));
 
   assert.deepEqual(knowledge.architecturalStrengths, []);
   assert.deepEqual(values(knowledge.architecturalRisks), new Set([
@@ -169,10 +245,12 @@ test("monorepo fixture: package.json-per-workspace attributes React/Express to t
   ]));
 
   assert.ok(knowledge.architectureSummary.value.includes("monorepo"));
+  assertUniqueIds(knowledge.subsystems);
+  assertUniqueIds(knowledge.dependencyRelationships);
 });
 
 test("minimal fixture: zero evidence yields Unknown narrative and only the practices that can honestly be checked with no manifest", () => {
-  const knowledge = knowledgeFor("minimal");
+  const { knowledge } = analyze("minimal");
 
   assert.deepEqual(knowledge.subsystems, []);
   assert.deepEqual(knowledge.dependencyRelationships, []);
@@ -189,6 +267,21 @@ test("minimal fixture: zero evidence yields Unknown narrative and only the pract
   ]));
 });
 
+test("identity is deterministic: analyzing the same fixture twice produces byte-identical ids", () => {
+  const first = analyze("web-app");
+  const second = analyze("web-app");
+
+  assert.deepEqual(
+    first.knowledge.subsystems.map((s) => s.id),
+    second.knowledge.subsystems.map((s) => s.id)
+  );
+  assert.deepEqual(
+    first.knowledge.dependencyRelationships.map((r) => r.id).sort(),
+    second.knowledge.dependencyRelationships.map((r) => r.id).sort()
+  );
+  assert.equal(first.knowledge.architectureSummary.id, second.knowledge.architectureSummary.id);
+});
+
 test("smoke test: buildEngineeringKnowledge() runs against this actual repository's own analysis without crashing", () => {
   const repoRoot = findRepositoryRoot(import.meta.dirname);
   const analysis = buildRepositoryAnalysis(repoRoot);
@@ -199,4 +292,6 @@ test("smoke test: buildEngineeringKnowledge() runs against this actual repositor
   for (const detection of [knowledge.architectureSummary, knowledge.technologyStackNarrative, ...knowledge.architecturalStrengths, ...knowledge.missingEngineeringPractices]) {
     assertWellFormedDetection(detection);
   }
+  assertUniqueIds(knowledge.subsystems);
+  assertUniqueIds(knowledge.dependencyRelationships);
 });

@@ -1,10 +1,13 @@
 /**
  * Template-generated (non-AI) prose: an overall architecture summary and a technology-stack narrative,
  * assembled only from fields RepositoryAnalysis already computed -- every sentence traces back to a specific
- * Detection, never an inference this module invents on its own.
+ * Detection, never an inference this module invents on its own. `sourceDetectionIds` records exactly which
+ * Detections fed each narrative (not just their rendered evidence text) -- both are Detections derived FROM
+ * other Detections, so both populate it, unlike RepositoryAnalysis's own base Detections.
  */
 
 import type { RepositoryAnalysis, Detection, Confidence } from "../../repository-analyzer/analysis/types";
+import { makeId } from "../../repository-analyzer/analysis/identity";
 
 function weakestConfidence(confidences: ReadonlyArray<Confidence>): Confidence {
   if (confidences.includes("Low")) return "Low";
@@ -14,7 +17,7 @@ function weakestConfidence(confidences: ReadonlyArray<Confidence>): Confidence {
 
 export function buildArchitectureSummary(analysis: RepositoryAnalysis, subsystemCount: number): Detection<string> {
   if (analysis.projectType.value === "Unknown") {
-    return { value: "Unknown", confidence: "Low", evidence: [], sourceFiles: [] };
+    return { id: makeId("architecture-summary", "unknown"), kind: "architecture-summary", value: "Unknown", confidence: "Low", evidence: [], sourceFiles: [], sourceDetectionIds: [] };
   }
 
   const parts: string[] = [`${analysis.projectName} is a ${analysis.projectType.value}.`];
@@ -29,15 +32,26 @@ export function buildArchitectureSummary(analysis: RepositoryAnalysis, subsystem
 
   const evidence = [...analysis.projectType.evidence, ...(strongPattern?.evidence ?? [])];
   const sourceFiles = [...analysis.projectType.sourceFiles, ...(strongPattern?.sourceFiles ?? [])];
+  const sourceDetectionIds = [analysis.projectType.id, ...(strongPattern ? [strongPattern.id] : [])];
   const confidence = weakestConfidence([analysis.projectType.confidence, ...(strongPattern ? [strongPattern.confidence] : [])]);
+  const value = parts.join(" ");
 
-  return { value: parts.join(" "), confidence, evidence: [...new Set(evidence)], sourceFiles: [...new Set(sourceFiles)] };
+  return {
+    id: makeId("architecture-summary", value),
+    kind: "architecture-summary",
+    value,
+    confidence,
+    evidence: [...new Set(evidence)],
+    sourceFiles: [...new Set(sourceFiles)],
+    sourceDetectionIds: [...new Set(sourceDetectionIds)],
+  };
 }
 
 export function buildTechnologyStackNarrative(analysis: RepositoryAnalysis): Detection<string> {
   const segments: string[] = [];
   const evidence: string[] = [];
   const sourceFiles: string[] = [];
+  const sourceDetectionIds: string[] = [];
 
   function describe(label: string, detections: ReadonlyArray<Detection<string>>): void {
     if (detections.length === 0) return;
@@ -45,6 +59,7 @@ export function buildTechnologyStackNarrative(analysis: RepositoryAnalysis): Det
     for (const detection of detections) {
       evidence.push(...detection.evidence);
       sourceFiles.push(...detection.sourceFiles);
+      sourceDetectionIds.push(detection.id);
     }
   }
 
@@ -58,7 +73,16 @@ export function buildTechnologyStackNarrative(analysis: RepositoryAnalysis): Det
   describe("Testing", analysis.testingFrameworks);
 
   if (segments.length === 0) {
-    return { value: "Unknown", confidence: "Low", evidence: [], sourceFiles: [] };
+    return { id: makeId("technology-stack-narrative", "unknown"), kind: "technology-stack-narrative", value: "Unknown", confidence: "Low", evidence: [], sourceFiles: [], sourceDetectionIds: [] };
   }
-  return { value: `${segments.join(". ")}.`, confidence: "High", evidence: [...new Set(evidence)], sourceFiles: [...new Set(sourceFiles)] };
+  const value = `${segments.join(". ")}.`;
+  return {
+    id: makeId("technology-stack-narrative", value),
+    kind: "technology-stack-narrative",
+    value,
+    confidence: "High",
+    evidence: [...new Set(evidence)],
+    sourceFiles: [...new Set(sourceFiles)],
+    sourceDetectionIds: [...new Set(sourceDetectionIds)],
+  };
 }

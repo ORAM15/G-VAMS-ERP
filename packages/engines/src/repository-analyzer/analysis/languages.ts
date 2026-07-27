@@ -6,6 +6,7 @@
 
 import type { WalkedFile } from "./walk";
 import type { Detection, LanguageEntry } from "./types";
+import { makeId } from "./identity";
 
 const LANGUAGE_EXTENSIONS: Readonly<Record<string, string>> = {
   ".js": "JavaScript",
@@ -60,7 +61,7 @@ export function detectLanguages(files: ReadonlyArray<WalkedFile>): LanguageEntry
     counts.set(language, (counts.get(language) ?? 0) + 1);
   }
   return [...counts.entries()]
-    .map(([language, fileCount]) => ({ language, fileCount }))
+    .map(([language, fileCount]) => ({ id: makeId("language", language), language, fileCount }))
     .sort((a, b) => b.fileCount - a.fileCount || a.language.localeCompare(b.language));
 }
 
@@ -72,19 +73,32 @@ export function detectLanguages(files: ReadonlyArray<WalkedFile>): LanguageEntry
 export function detectPrimaryLanguages(languages: ReadonlyArray<LanguageEntry>): Detection<string>[] {
   const total = languages.reduce((sum, entry) => sum + entry.fileCount, 0);
   if (total === 0) {
-    return [{ value: "Unknown", confidence: "Low", evidence: [], sourceFiles: [] }];
+    return [{ id: makeId("primary-language", "unknown"), kind: "primary-language", value: "Unknown", confidence: "Low", evidence: [], sourceFiles: [], sourceDetectionIds: [] }];
   }
   const primary = languages.filter((entry) => entry.fileCount / total >= 0.15);
   if (primary.length === 0) {
-    return [{ value: "Unknown", confidence: "Low", evidence: [`no language accounts for even 15% of ${total} source file(s)`], sourceFiles: [] }];
+    return [
+      {
+        id: makeId("primary-language", "unknown"),
+        kind: "primary-language",
+        value: "Unknown",
+        confidence: "Low",
+        evidence: [`no language accounts for even 15% of ${total} source file(s)`],
+        sourceFiles: [],
+        sourceDetectionIds: [],
+      },
+    ];
   }
   return primary.map((entry) => {
     const share = entry.fileCount / total;
     return {
+      id: makeId("primary-language", entry.language),
+      kind: "primary-language",
       value: entry.language,
       confidence: share >= 0.4 ? "High" : "Medium",
       evidence: [`${entry.fileCount} of ${total} source file(s) (${Math.round(share * 100)}%)`],
       sourceFiles: [],
+      sourceDetectionIds: [],
     };
   });
 }

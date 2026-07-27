@@ -9,6 +9,7 @@
 import type { WalkedFile } from "./walk";
 import { readFileSafe } from "./walk";
 import type { Detection } from "./types";
+import { makeId } from "./identity";
 
 export type FileSignatureCategory = "ci" | "docker" | "infrastructure" | "env" | "config" | "deployment";
 
@@ -122,10 +123,13 @@ export function detectFileSignatures(files: ReadonlyArray<WalkedFile>): Record<F
   for (const [label, { category, files }] of byLabel.entries()) {
     const sortedFiles = [...files].sort();
     result[category].push({
+      id: makeId(category, label),
+      kind: category,
       value: label,
       confidence: "High",
       evidence: sortedFiles.map((file) => `${file} present`),
       sourceFiles: sortedFiles,
+      sourceDetectionIds: [],
     });
   }
 

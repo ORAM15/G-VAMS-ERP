@@ -15,6 +15,7 @@ import { detectPackageManagers } from "./package-managers";
 import { detectRepositoryStructure, deriveDirectorySet, detectEntryPoints, detectMonorepo, detectArchitecturalPatterns } from "./structure";
 import { detectProjectType } from "./project-type";
 import type { Detection, RepositoryAnalysis } from "./types";
+import { makeId } from "./identity";
 
 /**
  * Same fallback chain as scripts/repository-intelligence.js's detectProjectName(): root package.json `name`,
@@ -77,12 +78,15 @@ export function buildRepositoryAnalysis(repositoryRoot: string): RepositoryAnaly
   const docker: Detection<boolean> =
     dockerDetections.length > 0
       ? {
+          id: makeId("docker", true),
+          kind: "docker",
           value: true,
           confidence: "High",
           evidence: dockerDetections.flatMap((d) => d.evidence),
           sourceFiles: dockerDetections.flatMap((d) => d.sourceFiles),
+          sourceDetectionIds: dockerDetections.map((d) => d.id),
         }
-      : { value: false, confidence: "Low", evidence: [], sourceFiles: [] };
+      : { id: makeId("docker", false), kind: "docker", value: false, confidence: "Low", evidence: [], sourceFiles: [], sourceDetectionIds: [] };
 
   const infrastructureFiles = [...fileSignatures.infrastructure, ...dependencySignatures.infrastructure].sort((a, b) =>
     a.value.localeCompare(b.value)
@@ -106,8 +110,10 @@ export function buildRepositoryAnalysis(repositoryRoot: string): RepositoryAnaly
     dependencySummary: {
       totalDependencies,
       manifests: manifests.map((manifest) => ({
+        id: makeId("manifest", manifest.relPath),
         path: manifest.relPath,
         ecosystem: manifest.ecosystem,
+        dependencyNames: manifest.dependencyNames,
         dependencyCount: manifest.dependencyNames.length,
       })),
     },

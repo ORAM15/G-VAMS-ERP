@@ -10,6 +10,7 @@
 
 import type { Ecosystem } from "./manifests";
 import type { Detection } from "./types";
+import { makeId } from "./identity";
 
 export type SignatureCategory =
   | "framework"
@@ -236,10 +237,13 @@ export function detectDependencySignatures(manifests: ReadonlyArray<ManifestDepe
   for (const [label, { category, sourceFiles }] of byLabel.entries()) {
     const files = [...sourceFiles].sort();
     result[category].push({
+      id: makeId(category, label),
+      kind: category,
       value: label,
       confidence: "High",
       evidence: files.map((file) => `declared dependency in ${file}`),
       sourceFiles: files,
+      sourceDetectionIds: [],
     });
   }
 

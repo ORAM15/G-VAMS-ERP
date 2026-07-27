@@ -12,6 +12,7 @@ One sub-package per Engineering Lifecycle phase, each a direct extraction of an 
 |---|---|
 | `repository-analyzer` (real; two implementations) | (1) `LegacyRepositoryAnalyzerAdapter` — still wraps the real, unmodified `scripts/repository-intelligence.js` verbatim, unchanged since Phase 3. (2) `RepositoryAnalyzerEngine`/`buildRepositoryAnalysis()` (Capability Sprint 1, Milestone 1) — a real, native TypeScript, repository-agnostic implementation with no `scripts/*.js` dependency, producing the richer evidence/confidence-scored `RepositoryAnalysis` shape (`./analysis/types.ts`). Both satisfy the same `EngineDescriptor` contract and the same `stage`/`artifactName` address; either can be wired in as the `observe` engine via `RuntimeBuilder.withObserveEngine()`. |
 | `engineering-knowledge` (real; Capability Sprint 1, Phase 2) | `EngineeringKnowledgeEngine`/`buildEngineeringKnowledge()` — a new, independent transformation of `repository-analyzer`'s `RepositoryAnalysis` into subsystems, dependency relationships, an architecture summary/tech-stack narrative, and evidence-based strengths/risks/debt/missing-practice findings (`./analysis/types.ts`'s `EngineeringKnowledge`). Deliberately NOT built on `scripts/engineering-knowledge.js` — that legacy script consumes the *legacy* `repository-analysis.json` shape (its `detectedModules`/school-ERP keyword concept), which the new, repository-agnostic `RepositoryAnalysis` doesn't produce; wrapping it was not an option. `scripts/engineering-knowledge.js` itself is untouched and still valid for the legacy pipeline. |
+| `engineering-reasoning` (real; Capability Sprint 1, Phase 3, MVP) | `EngineeringReasoningEngine`/`buildEngineeringReasoning()` — analyzes `engineering-knowledge`'s `EngineeringKnowledge` (never `RepositoryAnalysis` directly) via exactly 5 deterministic rules, producing evidence-based `Finding`s (`./analysis/types.ts`). No LLM, no planning/prioritization between Findings. Not built on any legacy script -- no `scripts/*.js` predecessor covers this. |
 | `historical-context` (future) | `scripts/historical-context-retriever.js` |
 | `recommendation` (future) | `scripts/recommendation-engine.js` |
 | `decision` (future) | `scripts/adaptive-decision-engine.js` (`scripts/decision-engine.js` is retired, not migrated — see `ORAM_V3_MIGRATION_PLAN.md` Section 4.3) |
@@ -57,5 +58,18 @@ artifact from the `ArtifactStore` for the current run. `createEngineeringKnowled
 works around this by recomputing a fresh `RepositoryAnalysis` internally (same deterministic result, extra
 CPU work, no Runtime change) rather than that gap being fixed unilaterally. See `engineering-knowledge.test.ts`
 and the shared `../repository-analyzer/__fixtures__/` for coverage.
+
+**Capability Sprint 1, Phase 3, MVP (current):** added `engineering-reasoning` -- exactly 5 rules
+(`subsystem-concentration`, `untested-api-surface`, `unverified-monorepo`, `subsystem-api-without-auth`,
+`opaque-subsystems`), each chosen because it reasons over MULTIPLE `EngineeringKnowledge` facts together
+(concentration across relationships, severity escalated by structural context, per-subsystem correlation)
+rather than repeating a single fact `EngineeringKnowledge`'s own rules already report. See
+`EngineeringReasoningEngine.ts`'s own file-level `CONCRETE LIMITATION` note for two disclosed gaps this
+phase ran into but did not fix unilaterally: the same `runId`-less `EngineDescriptor.run()` gap noted below
+for `engineering-knowledge`, and the absence of any `@oram/events` type for "Findings produced" (the closest
+existing type, `RecommendationsGeneratedEvent`, is reused with an honestly-`null` `topOpportunityId` rather
+than a fabricated fit). See `engineering-reasoning.test.ts` and `./__fixtures__/concentrated-monorepo/` (plus
+the shared `../repository-analyzer/__fixtures__/`, including one existing fixture that turns out to
+genuinely trigger 3 of the 5 rules) for coverage.
 
 Every other sub-package in the table above is still scaffolded (README only).

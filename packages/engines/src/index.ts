@@ -7,3 +7,4 @@
  */
 export * from "./repository-analyzer";
 export * from "./engineering-knowledge";
+export * from "./engineering-reasoning";

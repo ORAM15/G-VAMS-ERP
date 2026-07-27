@@ -9,23 +9,29 @@
 
 import type { WalkedFile } from "./walk";
 import { readFileSafe } from "./walk";
-import type { Detection, RepositoryStructureEntry } from "./types";
+import type { Confidence, Detection, RepositoryStructureEntry } from "./types";
+import { makeId } from "./identity";
 
 function basename(relPath: string): string {
   return relPath.split("/").pop() ?? relPath;
 }
 
-function classifyRole(name: string): RepositoryStructureEntry["role"] {
+/**
+ * `role` is a naming-convention match, never a content inspection -- `confidence` says so honestly instead
+ * of presenting the guess as fact: "Medium" when a keyword matched (a real, deliberate convention, but never
+ * verified against the directory's actual contents), "Low" when nothing matched at all.
+ */
+function classifyRole(name: string): { role: RepositoryStructureEntry["role"]; confidence: Confidence } {
   const lower = name.toLowerCase();
-  if (["src", "lib", "app", "source", "cmd", "internal", "pkg"].includes(lower)) return "source";
-  if (["test", "tests", "__tests__", "spec", "specs", "e2e"].includes(lower)) return "tests";
-  if (["docs", "doc", "documentation"].includes(lower)) return "docs";
-  if (["scripts", "tools"].includes(lower)) return "scripts";
-  if ([".github", ".circleci", ".gitlab"].includes(lower)) return "ci";
-  if (["infra", "infrastructure", "terraform", "k8s", "kubernetes", "helm", "deploy", "deployment", "ansible"].includes(lower)) return "infrastructure";
-  if (["config", "configs", "conf"].includes(lower)) return "config";
-  if (["packages", "apps", "services", "modules"].includes(lower)) return "package";
-  return "unknown";
+  if (["src", "lib", "app", "source", "cmd", "internal", "pkg"].includes(lower)) return { role: "source", confidence: "Medium" };
+  if (["test", "tests", "__tests__", "spec", "specs", "e2e"].includes(lower)) return { role: "tests", confidence: "Medium" };
+  if (["docs", "doc", "documentation"].includes(lower)) return { role: "docs", confidence: "Medium" };
+  if (["scripts", "tools"].includes(lower)) return { role: "scripts", confidence: "Medium" };
+  if ([".github", ".circleci", ".gitlab"].includes(lower)) return { role: "ci", confidence: "Medium" };
+  if (["infra", "infrastructure", "terraform", "k8s", "kubernetes", "helm", "deploy", "deployment", "ansible"].includes(lower)) return { role: "infrastructure", confidence: "Medium" };
+  if (["config", "configs", "conf"].includes(lower)) return { role: "config", confidence: "Medium" };
+  if (["packages", "apps", "services", "modules"].includes(lower)) return { role: "package", confidence: "Medium" };
+  return { role: "unknown", confidence: "Low" };
 }
 
 /** Top-level directories plus one level deeper -- generic, not tied to any fixed set of expected directory names. */
@@ -33,7 +39,8 @@ export function detectRepositoryStructure(root: string, dirs: ReadonlySet<string
   const entries: RepositoryStructureEntry[] = [];
   for (const dir of dirs) {
     if (dir.split("/").length > 2) continue; // top-level + one level deep only
-    entries.push({ path: dir, role: classifyRole(basename(dir)) });
+    const { role, confidence } = classifyRole(basename(dir));
+    entries.push({ id: makeId("dir", dir), path: dir, role, confidence });
   }
   return entries.sort((a, b) => a.path.localeCompare(b.path));
 }
@@ -65,6 +72,7 @@ const CONVENTIONAL_ENTRY_POINTS = [
 
 export function detectEntryPoints(files: ReadonlyArray<WalkedFile>): Detection<string>[] {
   const detections: Detection<string>[] = [];
+  const explicitlyDetectedPaths = new Set<string>();
 
   for (const file of files) {
     if (basename(file.relPath) !== "package.json" || file.relPath.includes("node_modules/")) continue;
@@ -76,25 +84,36 @@ export function detectEntryPoints(files: ReadonlyArray<WalkedFile>): Detection<s
     } catch {
       continue;
     }
+    // `value` alone is NOT a safe id source here: a monorepo's packages very commonly each declare the same
+    // relative "main": "src/index.ts" -- a different physical file every time, relative to that package's own
+    // directory. The declaring manifest's own path is folded into the id so these can never collide.
     if (typeof pkg.main === "string") {
-      detections.push({ value: pkg.main, confidence: "High", evidence: [`"main" field in ${file.relPath}`], sourceFiles: [file.relPath] });
+      detections.push({ id: makeId("entry-point", `${file.relPath}:${pkg.main}`), kind: "entry-point", value: pkg.main, confidence: "High", evidence: [`"main" field in ${file.relPath}`], sourceFiles: [file.relPath], sourceDetectionIds: [] });
+      explicitlyDetectedPaths.add(pkg.main);
     }
     if (typeof pkg.module === "string") {
-      detections.push({ value: pkg.module, confidence: "High", evidence: [`"module" field in ${file.relPath}`], sourceFiles: [file.relPath] });
+      detections.push({ id: makeId("entry-point", `${file.relPath}:${pkg.module}`), kind: "entry-point", value: pkg.module, confidence: "High", evidence: [`"module" field in ${file.relPath}`], sourceFiles: [file.relPath], sourceDetectionIds: [] });
+      explicitlyDetectedPaths.add(pkg.module);
     }
     if (typeof pkg.bin === "string") {
-      detections.push({ value: pkg.bin, confidence: "High", evidence: [`"bin" field in ${file.relPath}`], sourceFiles: [file.relPath] });
+      detections.push({ id: makeId("entry-point", `${file.relPath}:${pkg.bin}`), kind: "entry-point", value: pkg.bin, confidence: "High", evidence: [`"bin" field in ${file.relPath}`], sourceFiles: [file.relPath], sourceDetectionIds: [] });
+      explicitlyDetectedPaths.add(pkg.bin);
     } else if (pkg.bin && typeof pkg.bin === "object") {
       for (const value of Object.values(pkg.bin)) {
-        detections.push({ value, confidence: "High", evidence: [`"bin" field in ${file.relPath}`], sourceFiles: [file.relPath] });
+        detections.push({ id: makeId("entry-point", `${file.relPath}:${value}`), kind: "entry-point", value, confidence: "High", evidence: [`"bin" field in ${file.relPath}`], sourceFiles: [file.relPath], sourceDetectionIds: [] });
+        explicitlyDetectedPaths.add(value);
       }
     }
   }
 
   const relPaths = new Set(files.map((f) => f.relPath));
   for (const candidate of CONVENTIONAL_ENTRY_POINTS) {
+    // Skip a path already detected from an explicit package.json field: same fact, stronger evidence already
+    // recorded -- a second, lower-confidence entry for the identical path would collide on id (this was
+    // previously a disclosed, unfixed limitation; identity now forces the fix).
+    if (explicitlyDetectedPaths.has(candidate)) continue;
     if (relPaths.has(candidate)) {
-      detections.push({ value: candidate, confidence: "Medium", evidence: ["conventional entry point filename"], sourceFiles: [candidate] });
+      detections.push({ id: makeId("entry-point", candidate), kind: "entry-point", value: candidate, confidence: "Medium", evidence: ["conventional entry point filename"], sourceFiles: [candidate], sourceDetectionIds: [] });
     }
   }
 
@@ -145,13 +164,16 @@ export function detectMonorepo(files: ReadonlyArray<WalkedFile>): Detection<bool
 
   const isMonorepo = (hasWorkspacesField || hasToolConfig) && additionalPackageJsonCount >= 1;
   if (!isMonorepo) {
-    return { value: false, confidence: "Low", evidence: [], sourceFiles: [] };
+    return { id: makeId("monorepo", false), kind: "monorepo", value: false, confidence: "Low", evidence: [], sourceFiles: [], sourceDetectionIds: [] };
   }
   return {
+    id: makeId("monorepo", true),
+    kind: "monorepo",
     value: true,
     confidence: hasWorkspacesField && additionalPackageJsonCount >= 2 ? "High" : "Medium",
     evidence,
     sourceFiles,
+    sourceDetectionIds: [],
   };
 }
 
@@ -176,21 +198,29 @@ export function detectArchitecturalPatterns(dirs: ReadonlySet<string>): Detectio
 
   const clean = siblingGroup(dirs, "domain", ["application", "infrastructure"], 2);
   if (clean) {
+    const value = "Likely Clean/Hexagonal Architecture";
     patterns.push({
-      value: "Likely Clean/Hexagonal Architecture",
+      id: makeId("architectural-pattern", value),
+      kind: "architectural-pattern",
+      value,
       confidence: clean.matched.length === 3 ? "High" : "Medium",
       evidence: clean.matched.map((dir) => `${dir}/ directory present`),
       sourceFiles: clean.matched,
+      sourceDetectionIds: [],
     });
   }
 
   const mvc = siblingGroup(dirs, "controllers", ["models", "views"], 2);
   if (mvc) {
+    const value = "Likely MVC (Model-View-Controller)";
     patterns.push({
-      value: "Likely MVC (Model-View-Controller)",
+      id: makeId("architectural-pattern", value),
+      kind: "architectural-pattern",
+      value,
       confidence: mvc.matched.length === 3 ? "High" : "Medium",
       evidence: mvc.matched.map((dir) => `${dir}/ directory present`),
       sourceFiles: mvc.matched,
+      sourceDetectionIds: [],
     });
   }
 
@@ -198,11 +228,15 @@ export function detectArchitecturalPatterns(dirs: ReadonlySet<string>): Detectio
     if (basename(dir) !== "features") continue;
     const featureModules = [...dirs].filter((d) => d.startsWith(`${dir}/`) && d.slice(dir.length + 1).split("/").length === 1);
     if (featureModules.length >= 2) {
+      const value = "Likely Feature-based/Modular structure";
       patterns.push({
-        value: "Likely Feature-based/Modular structure",
+        id: makeId("architectural-pattern", value),
+        kind: "architectural-pattern",
+        value,
         confidence: "Medium",
         evidence: [`${dir}/ contains ${featureModules.length} feature module(s)`],
         sourceFiles: [dir, ...featureModules.slice(0, 10)],
+        sourceDetectionIds: [],
       });
       break;
     }
@@ -211,23 +245,31 @@ export function detectArchitecturalPatterns(dirs: ReadonlySet<string>): Detectio
   const hasApps = dirs.has("apps");
   const hasPackages = dirs.has("packages");
   if (hasApps && hasPackages) {
+    const value = "Monorepo (apps/packages convention)";
     patterns.push({
-      value: "Monorepo (apps/packages convention)",
+      id: makeId("architectural-pattern", value),
+      kind: "architectural-pattern",
+      value,
       confidence: "High",
       evidence: ["apps/ and packages/ both present at repository root"],
       sourceFiles: ["apps", "packages"],
+      sourceDetectionIds: [],
     });
   } else if (hasPackages) {
+    const value = "Monorepo (packages/* convention)";
     patterns.push({
-      value: "Monorepo (packages/* convention)",
+      id: makeId("architectural-pattern", value),
+      kind: "architectural-pattern",
+      value,
       confidence: "Medium",
       evidence: ["packages/ present at repository root"],
       sourceFiles: ["packages"],
+      sourceDetectionIds: [],
     });
   }
 
   if (patterns.length === 0) {
-    return [{ value: "Unknown", confidence: "Low", evidence: [], sourceFiles: [] }];
+    return [{ id: makeId("architectural-pattern", "unknown"), kind: "architectural-pattern", value: "Unknown", confidence: "Low", evidence: [], sourceFiles: [], sourceDetectionIds: [] }];
   }
   return patterns;
 }

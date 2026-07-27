@@ -114,12 +114,14 @@ same commit twice produces byte-identical results.
 
 ### Running it today, in this repository, before `oram` has a published build
 
-The `oram` binary isn't published yet (see `packages/cli/README.md`'s Status section), so until then the
-same command can be run in dev mode from the repository root:
+The `oram` binary isn't published yet (see `packages/cli/README.md`'s Status section). Until then, `npm
+install` at the repository root resolves the `@oram/*` packages as real npm workspace symlinks, and the
+same command runs in dev mode via `tsx`:
 
 ```bash
-npx tsx -e "import('./packages/cli/src/commands/analyze.ts').then(m => m.analyzeCommand(['.']))"
+npm install
+npx tsx packages/cli/src/bin.ts analyze .
 ```
 
-This calls the exact same `analyzeCommand()` that `oram analyze .` will call once the CLI is packaged —
+`packages/cli/src/bin.ts` is the same dev-mode entry point `oram`'s published `bin` will eventually wrap —
 the output shown above is not aspirational, it's what this command prints today.

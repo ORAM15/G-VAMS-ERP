@@ -13,6 +13,7 @@ One sub-package per Engineering Lifecycle phase, each a direct extraction of an 
 | `repository-analyzer` (real; two implementations) | (1) `LegacyRepositoryAnalyzerAdapter` — still wraps the real, unmodified `scripts/repository-intelligence.js` verbatim, unchanged since Phase 3. (2) `RepositoryAnalyzerEngine`/`buildRepositoryAnalysis()` (Capability Sprint 1, Milestone 1) — a real, native TypeScript, repository-agnostic implementation with no `scripts/*.js` dependency, producing the richer evidence/confidence-scored `RepositoryAnalysis` shape (`./analysis/types.ts`). Both satisfy the same `EngineDescriptor` contract and the same `stage`/`artifactName` address; either can be wired in as the `observe` engine via `RuntimeBuilder.withObserveEngine()`. |
 | `engineering-knowledge` (real; Capability Sprint 1, Phase 2) | `EngineeringKnowledgeEngine`/`buildEngineeringKnowledge()` — a new, independent transformation of `repository-analyzer`'s `RepositoryAnalysis` into subsystems, dependency relationships, an architecture summary/tech-stack narrative, and evidence-based strengths/risks/debt/missing-practice findings (`./analysis/types.ts`'s `EngineeringKnowledge`). Deliberately NOT built on `scripts/engineering-knowledge.js` — that legacy script consumes the *legacy* `repository-analysis.json` shape (its `detectedModules`/school-ERP keyword concept), which the new, repository-agnostic `RepositoryAnalysis` doesn't produce; wrapping it was not an option. `scripts/engineering-knowledge.js` itself is untouched and still valid for the legacy pipeline. |
 | `engineering-reasoning` (real; Capability Sprint 1, Phase 3, MVP) | `EngineeringReasoningEngine`/`buildEngineeringReasoning()` — analyzes `engineering-knowledge`'s `EngineeringKnowledge` (never `RepositoryAnalysis` directly) via exactly 5 deterministic rules, producing evidence-based `Finding`s (`./analysis/types.ts`). No LLM, no planning/prioritization between Findings. Not built on any legacy script -- no `scripts/*.js` predecessor covers this. |
+| `engineering-planning` (real; Capability Sprint 2) | `EngineeringPlanningEngine`/`buildEngineeringPlan()` — maps `engineering-reasoning`'s `Finding`s (never `EngineeringKnowledge`/`RepositoryAnalysis` directly) into `Mission`s via exactly 3 deterministic mapping rules, each aggregating every matching Finding into one Mission with one `MissionTask` per Finding (`./analysis/types.ts`). No LLM, no scheduling/dependency-ordering between Missions. Not built on any legacy script. |
 | `historical-context` (future) | `scripts/historical-context-retriever.js` |
 | `recommendation` (future) | `scripts/recommendation-engine.js` |
 | `decision` (future) | `scripts/adaptive-decision-engine.js` (`scripts/decision-engine.js` is retired, not migrated — see `ORAM_V3_MIGRATION_PLAN.md` Section 4.3) |
@@ -71,5 +72,21 @@ existing type, `RecommendationsGeneratedEvent`, is reused with an honestly-`null
 than a fabricated fit). See `engineering-reasoning.test.ts` and `./__fixtures__/concentrated-monorepo/` (plus
 the shared `../repository-analyzer/__fixtures__/`, including one existing fixture that turns out to
 genuinely trigger 3 of the 5 rules) for coverage.
+
+**Capability Sprint 2 (current):** added `engineering-planning` -- exactly 3 Finding -> Mission mapping rules
+(`improve-subsystem-documentation` matches `Finding.kind === "opaque-subsystems"`; `increase-test-coverage`
+matches `Finding.category === "testing-gap"`; `refactor-circular-dependencies` matches
+`Finding.kind === "circular-dependencies"`). See `./rules.ts`'s own file-level `CONCRETE LIMITATION` note: the
+first two mappings are real and can genuinely fire against today's `engineering-reasoning` output; the third
+cannot yet, because Engineering Reasoning has no dependency-cycle detection -- it is included because it was
+an explicitly requested initial mapping, verified correct via a unit test against a hand-built Finding, and
+will activate automatically once a future Engineering Reasoning rule adds that detection (not added here,
+per this project's "explain a limitation before implementing a new abstraction" rule). See
+`EngineeringPlanningEngine.ts`'s own file-level `CONCRETE LIMITATION` note for the same disclosed
+`runId`-less `EngineDescriptor.run()` gap and `@oram/events` vocabulary gap already noted for
+`engineering-reasoning`, one stage further down. See `engineering-planning.test.ts` and
+`../engineering-reasoning/__fixtures__/concentrated-monorepo/` (plus the shared
+`../repository-analyzer/__fixtures__/`) for coverage, including a stored JSON snapshot of a full
+`EngineeringPlan`.
 
 Every other sub-package in the table above is still scaffolded (README only).

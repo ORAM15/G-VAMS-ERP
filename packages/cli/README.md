@@ -19,9 +19,13 @@ attach to a `@oram/runtime` `Runtime` instance, call one method on it, format th
 
 ## Status
 
-Command architecture only (`src/commands/*.ts`, one file per command, each currently printing
-`"Not implemented yet."`). No command is wired to a real Runtime yet. See `ORAM_V3_MIGRATION_PLAN.md`
-Milestone 1.
+`analyze` and `plan` are real: each runs @oram/engines' pipeline directly (Repository Analysis ->
+Engineering Knowledge -> Engineering Reasoning, and, for `plan`, one stage further into Engineering Planning)
+and prints a presentation-ready console report -- see `src/report/`. Neither is wired to `@oram/runtime`
+(no Lifecycle, no ArtifactStore, no EventBus); that's deliberate, see analyze.ts's/plan.ts's own header
+comments. Every other command (`init`, `run`, `execute`, `validate`, `inspect`, `dashboard`, `doctor`,
+`replay`) is still command architecture only, currently printing `"Not implemented yet."`. See
+`ORAM_V3_MIGRATION_PLAN.md` Milestone 1.
 
 `scripts/gvams-cli.js` remains the only functional CLI in the meantime and is not modified by this package's
 existence.

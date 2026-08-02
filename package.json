@@ -7,6 +7,12 @@
   "workspaces": [
     "packages/*"
   ],
+  "bin": {
+    "oram": "./packages/cli/dist/bin.js"
+  },
+  "scripts": {
+    "build": "npm run build --workspace packages/cli"
+  },
   "devDependencies": {
     "tsx": "^4.19.0"
   }

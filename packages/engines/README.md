@@ -14,11 +14,16 @@ One sub-package per Engineering Lifecycle phase, each a direct extraction of an 
 | `engineering-knowledge` (real; Capability Sprint 1, Phase 2) | `EngineeringKnowledgeEngine`/`buildEngineeringKnowledge()` — a new, independent transformation of `repository-analyzer`'s `RepositoryAnalysis` into subsystems, dependency relationships, an architecture summary/tech-stack narrative, and evidence-based strengths/risks/debt/missing-practice findings (`./analysis/types.ts`'s `EngineeringKnowledge`). Deliberately NOT built on `scripts/engineering-knowledge.js` — that legacy script consumes the *legacy* `repository-analysis.json` shape (its `detectedModules`/school-ERP keyword concept), which the new, repository-agnostic `RepositoryAnalysis` doesn't produce; wrapping it was not an option. `scripts/engineering-knowledge.js` itself is untouched and still valid for the legacy pipeline. |
 | `engineering-reasoning` (real; Capability Sprint 1, Phase 3, MVP) | `EngineeringReasoningEngine`/`buildEngineeringReasoning()` — analyzes `engineering-knowledge`'s `EngineeringKnowledge` (never `RepositoryAnalysis` directly) via exactly 5 deterministic rules, producing evidence-based `Finding`s (`./analysis/types.ts`). No LLM, no planning/prioritization between Findings. Not built on any legacy script -- no `scripts/*.js` predecessor covers this. |
 | `engineering-planning` (real; Capability Sprint 2) | `EngineeringPlanningEngine`/`buildEngineeringPlan()` — maps `engineering-reasoning`'s `Finding`s (never `EngineeringKnowledge`/`RepositoryAnalysis` directly) into `Mission`s via exactly 3 deterministic mapping rules, each aggregating every matching Finding into one Mission with one `MissionTask` per Finding (`./analysis/types.ts`). No LLM, no scheduling/dependency-ordering between Missions. Not built on any legacy script. |
+| `engineering-missions` (real; Capability Sprint 5) | `EngineeringMissionsEngine`/`buildMissionGraph()` — turns `engineering-planning`'s `Mission`s (never `EngineeringReasoning`/`EngineeringKnowledge`/`RepositoryAnalysis` directly) into a `MissionGraph`: the same Missions, now carrying `dependencyIds`/`order` plus the graph's own `MissionDependency` edges and `executionOrder` (`./analysis/types.ts`). No AI, no filesystem, no execution -- see `./rules.ts`'s own file-level note on the single linear-chain dependency rule this MVP uses. Not built on any legacy script. |
+| `implementation-requests` (real; Capability Sprint 6) | `ImplementationRequestsEngine`/`buildImplementationRequests()` — turns `engineering-missions`' `Mission`s (never `EngineeringPlan`/`EngineeringReasoning`/`EngineeringKnowledge`/`RepositoryAnalysis` directly) into execution-READY `ImplementationRequest`s, exactly one per Mission (`./analysis/types.ts`). No AI, no filesystem, no execution -- see `./rules.ts`'s own file-level note on the text-heuristic `implementationTargets` derivation. Effectively fulfills the future `work-order` row below under a different, more specific name; not built on `scripts/implementation-request-engine.js` (repository-agnostic, no legacy shape dependency). |
+| `execution-planning` (real; Capability Sprint 7) | `ExecutionPlanningEngine`/`buildExecutionPlans()` — turns `implementation-requests`' `ImplementationRequest`s (never `MissionGraph`/`EngineeringPlan`/`EngineeringReasoning`/`EngineeringKnowledge`/`RepositoryAnalysis` directly) into `ExecutionPlan`s, exactly one per request, each a deterministic, ordered sequence of `ExecutionStep` templates (`./analysis/types.ts`). No AI, no filesystem, no Runtime, no Providers -- steps describe what should happen, nothing here does it. See `./rules.ts`'s own file-level note on the two disclosed limitations this stage inherited. Effectively fulfills the future `execution-planner` row below under a different name. |
+| `implementation-executor` (real; Capability Sprint 8) | `ImplementationExecutorEngine`/`executeAll()`/`ImplementationExecutor.execute()` — walks each `execution-planning` `ExecutionPlan`'s steps, in order, through a `GitAdapter`/`FileAdapter`/`CommandAdapter` (`./adapters/types.ts`), producing one `ExecutionResult` per plan (`./analysis/types.ts`). Two adapter implementations: `MemoryAdapter` (the default -- deterministic, in-memory, zero side effects) and `RealAdapter` (every method throws `NotImplementedYetError`, on purpose; never the default). No AI, no autonomous decisions -- the only "decision" is a fixed rule: stop and skip the rest once a step fails. Deliberately NOT built on the real, existing `scripts/implementation-executor.js` (a genuinely functional legacy component with `EXECUTION_APPROVED`-gated Provider execution, e.g. `claude-code-v1`) -- that script still exists, is untouched, and is not wrapped or superseded by this package; this is a new, repository-agnostic, non-Provider, non-executing sibling, not a migration of it. |
+| `provider-execution` (real; Capability Sprint 9) | `ProviderExecutionEngine`/`runAll()` — the layer BEFORE any real change could ever happen: turns each `execution-planning` `ExecutionStep` into a `PromptArtifact` (`./analysis/build-prompt.ts`), calls a `Provider.generate()` (`./providers/types.ts`) to get an `LLMResponse`, and wraps that as a `PatchArtifact` -- a plain, unparsed, unvalidated container (`./analysis/build-patch.ts`). Two categories of `Provider`: `MemoryProvider` (the default -- deterministic canned responses, no AI calls) and `ClaudeProvider`/`GeminiProvider`/`OpenAIProvider` (every method throws the SAME `NotImplementedYetError` reused, read-only, from `implementation-executor`'s `RealAdapter`; never the default). Generates AI requests and captures AI responses ONLY -- never modifies git, the filesystem, or runs a shell command; never applies a patch (Validation and Application are both explicitly future-sprint work). |
 | `historical-context` (future) | `scripts/historical-context-retriever.js` |
 | `recommendation` (future) | `scripts/recommendation-engine.js` |
 | `decision` (future) | `scripts/adaptive-decision-engine.js` (`scripts/decision-engine.js` is retired, not migrated — see `ORAM_V3_MIGRATION_PLAN.md` Section 4.3) |
-| `execution-planner` (future) | `scripts/execution-planner.js` |
-| `work-order` (future) | `scripts/implementation-request-engine.js` |
+| `execution-planner` (future; see `execution-planning` above) | `scripts/execution-planner.js` |
+| `work-order` (future; see `implementation-requests` above) | `scripts/implementation-request-engine.js` |
 | `validation` (future) | `scripts/validation-engine.js` |
 | `reflection` (future) | `scripts/reflection-engine.js` |
 | `run-history` (future) | `scripts/run-history-manager.js` |
@@ -88,5 +93,89 @@ per this project's "explain a limitation before implementing a new abstraction" 
 `../engineering-reasoning/__fixtures__/concentrated-monorepo/` (plus the shared
 `../repository-analyzer/__fixtures__/`) for coverage, including a stored JSON snapshot of a full
 `EngineeringPlan`.
+
+**Capability Sprint 5 (current):** added `engineering-missions` -- each `EngineeringPlan` Mission becomes one
+`Mission` graph node, in the same order Engineering Planning already produced them, connected by a single
+deterministic rule: each Mission depends on exactly the one before it (a linear chain), recorded both as
+`Mission.dependencyIds` and as first-class `MissionDependency` edges, with `MissionGraph.executionOrder`
+giving a valid topological order. See `./rules.ts`'s own file-level `CONCRETE LIMITATION` note: this is an
+honest default sequencing over the Plan's existing order, not a claim of discovered real-world work
+dependencies -- EngineeringPlan carries no such data, and inventing one would be fabrication. Its own `Mission`
+type is engineering-planning's `Mission` plus `dependencyIds`/`order`; re-exported from `@oram/engines` as
+`MissionNode` to avoid colliding with engineering-planning's `Mission` (see `../index.ts`'s own comment).
+See `EngineeringMissionsEngine.ts`'s own file-level `CONCRETE LIMITATION` note for the same disclosed
+`runId`-less `EngineDescriptor.run()` gap and `@oram/events` vocabulary gap already noted for
+`engineering-planning`, one stage further down. See `engineering-missions.test.ts` (including a stored JSON
+snapshot of a full `MissionGraph`) for coverage. Does not implement execution -- that is explicitly out of
+scope for this Sprint.
+
+**Capability Sprint 6 (current):** added `implementation-requests` -- each `MissionGraph` Mission becomes
+exactly one `ImplementationRequest`, in the graph's own `executionOrder`, carrying its Mission's
+`id`/`title`/`priority`/`rationale`/`expectedImpact`/`estimatedEffort` unchanged plus a synthesized `goal`
+(`title -- expectedImpact`, concatenated verbatim), `acceptanceCriteria` (one per `MissionTask`, its own
+description framed as a completion statement), and `constraints` (one universal + one per Mission `kind`,
+both templated, never fabricated per-run). See `./rules.ts`'s own file-level `CONCRETE LIMITATION` note for
+two disclosed gaps: `implementationTargets[].subsystem` is extracted via a text-heuristic regex over each
+MissionTask's own description (verified against all 5 Engineering Reasoning Finding summary templates, zero
+false positives today, but still a heuristic, not a structural join -- MissionGraph carries no subsystem-id
+references), and `implementationTargets[].files` is always `[]` (MissionGraph carries no file-level
+provenance at all to derive it from). See `ImplementationRequestsEngine.ts`'s own file-level
+`CONCRETE LIMITATION` note for the same disclosed `runId`-less `EngineDescriptor.run()` gap and `@oram/events`
+vocabulary gap already noted for `engineering-missions`, one stage further down. See
+`implementation-requests.test.ts` (including a stored JSON snapshot of a full `ImplementationRequestSet`) for
+coverage. Does not implement execution -- this stage only prepares execution-ready requests, per this
+Sprint's explicit scope.
+
+**Capability Sprint 7 (current):** added `execution-planning` -- each `ImplementationRequest` becomes exactly
+one `ExecutionPlan`, carrying `requestId`/`title`/`priority` and a deterministic 4-step sequence
+(`CREATE_BRANCH` -> a title-templated creation/modification step -> `RUN_TESTS` -> `COMMIT`), plus a linear
+`dependencyIds` chain over the request set's own order (mirroring `engineering-missions`' identical
+solution one stage up). See `./rules.ts`'s own file-level `CONCRETE LIMITATION` note for two disclosed gaps,
+both consequences of Sprint 6 not carrying certain fields forward: the creation/modification step is looked
+up by `ImplementationRequest.title` (a small, fixed, fully known set of strings) rather than a `Mission.kind`
+field, which Sprint 6 never carried onto `ImplementationRequest`; and `dependencyIds` are a default linear
+sequence, not real dependency data, because Sprint 6 never carried `MissionGraph`'s `dependencyIds`/
+`MissionDependency` edges onto `ImplementationRequest` either. Both fall back honestly (a generic
+`MODIFY_FILE` template for any unrecognized title) rather than guessing. See
+`ExecutionPlanningEngine.ts`'s own file-level `CONCRETE LIMITATION` note for the same disclosed `runId`-less
+`EngineDescriptor.run()` gap and `@oram/events` vocabulary gap already noted for `implementation-requests`,
+one stage further down. See `execution-planning.test.ts` (including a stored JSON snapshot of a full
+`ExecutionPlanSet`) for coverage. Steps are templates only -- this package reads no file, writes no file,
+spawns no process, and calls no Provider; "Execution Planning must NOT modify files. Execution Planning must
+NOT execute commands."
+
+**Capability Sprint 8 (current):** added `implementation-executor` -- the first package in this pipeline that
+actually *runs* something, even though by default it runs nothing real. `ImplementationExecutor.execute(plan)`
+walks one `ExecutionPlan`'s steps in order, dispatching each to a `GitAdapter`/`FileAdapter`/`CommandAdapter`
+(one of 3 categories covering all 9 `ExecutionAction` kinds) and recording an `ExecutionStepResult`; the
+first step to FAIL causes every remaining step to be recorded SKIPPED, and the overall `ExecutionResult`
+carries a single `ExecutionFailure` naming the step that actually failed. `MemoryAdapter` -- the default for
+both `ImplementationExecutor` and `ImplementationExecutorEngine` -- always reports SUCCESS deterministically
+without touching git, the filesystem, or a shell; `RealAdapter` exists only as a stub whose every method
+throws `NotImplementedYetError`, so it can never run something real by accident. No `ExecutionResultSet`
+aggregate type exists (see `./analysis/types.ts`'s own header comment) -- this Sprint's own spec asked only
+for the singular types plus `execute(plan)`; running a whole `ExecutionPlanSet` is the thin `executeAll()`
+helper, not a new named artifact. See `implementation-executor.test.ts` for coverage, including a stored
+JSON snapshot, explicit failure-handling tests (both an adapter-returned FAILED and an adapter that throws),
+and a zero-step-plan test. Does not modify Runtime; does not execute real git/npm/filesystem commands under
+any default configuration.
+
+**Capability Sprint 9 (current):** added `provider-execution` -- the first package to model what an actual
+AI-assisted code change would look like, while still never making one. `ProviderExecutionEngine.run(plan)`
+walks a single `execution-planning` `ExecutionPlan`'s steps and, per step: builds a `PromptArtifact` (a fixed
+system prompt + a userPrompt whose first line is a self-controlled `Action: X` format), calls the injected
+`Provider.generate()`, and wraps the resulting `LLMResponse` as a `PatchArtifact`. `MemoryProvider` -- the
+default for both the class and `createProviderExecutionEngine()` -- returns a deterministic canned response
+keyed by that same `Action: X` line (recovered via a fixed regex over a format this package itself defines,
+not free-text scraping of prose it doesn't control); an unrecognized action falls back to a generic summary
+rather than guessing. `PatchArtifact` is enforced as a container ONLY: `unifiedDiff` is `response.rawText`
+verbatim, and `language`/`summary` are never inferred by inspecting that text (see `./analysis/build-patch.ts`'s
+own note) -- doing so would itself be parsing, which this Sprint explicitly excludes. No
+`ProviderExecutionEngineEngine.ts` wrapper file exists; `createProviderExecutionEngine()` (the same
+`EngineDescriptor` factory pattern every prior stage provides) is co-located in `ProviderExecutionEngine.ts`
+itself, disclosed there, since this Sprint's own spec names the core worker class the same name every prior
+stage reserved for its EngineDescriptor wrapper. See `provider-execution.test.ts` (including a stored JSON
+snapshot and an explicit test that `ProviderExecutionEngine` propagates rather than swallows a
+`ClaudeProvider` throw) for coverage. No CLI command was added -- none was requested this Sprint.
 
 Every other sub-package in the table above is still scaffolded (README only).

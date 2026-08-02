@@ -4,12 +4,42 @@ The `oram` command — the primary Experience-layer entry point. Supersedes `scr
 (see `ORAM_V3_MIGRATION_PLAN.md` Section 4.3); no user of `oram` should ever need to know
 `scripts/autonomous-orchestrator.js` exists.
 
+## Installation
+
+From the repository root:
+
+```bash
+npm install
+npm run build
+npm link
+```
+
+`npm run build` bundles `packages/cli/src/bin.ts` (via esbuild) into `packages/cli/dist/bin.js`. `npm link`
+uses the workspace root's own `bin` field to expose that file globally as `oram`.
+
+## Usage
+
+```bash
+oram analyze .
+oram plan .
+oram missions .
+oram requests .
+oram execute-plan .
+oram execute .
+oram --help
+oram --version
+```
+
 ## Responsibility
 
-Ten commands (`init`, `run`, `analyze`, `plan`, `execute`, `validate`, `inspect`, `dashboard`, `doctor`,
-`replay`) — see `docs/ORAM_SPECIFICATION_v1.md`'s companion CLI table in `ORAM_V3_MIGRATION_PLAN.md` Section
-6 for each command's purpose/inputs/outputs. Every command is a thin wrapper: parse arguments, construct or
-attach to a `@oram/runtime` `Runtime` instance, call one method on it, format the result for the terminal.
+The original fixed ten commands (`init`, `run`, `analyze`, `plan`, `execute`, `validate`, `inspect`,
+`dashboard`, `doctor`, `replay`) — see `docs/ORAM_SPECIFICATION_v1.md`'s companion CLI table in
+`ORAM_V3_MIGRATION_PLAN.md` Section 6 for each command's purpose/inputs/outputs — plus `help`/`version`
+(Sprint 4.5), `missions` (Sprint 5), `requests` (Sprint 6), `execute-plan` (Sprint 7), and a real
+implementation of `execute` (Sprint 8, superseding its earlier stub -- see execute.ts's own header comment
+for what that stub's original, heavier, Provider-gated vision was and why it's still a TODO, not this).
+Every command is a thin wrapper: parse arguments, construct or attach to a `@oram/runtime` `Runtime`
+instance, call one method on it, format the result for the terminal.
 
 ## Explicit non-responsibilities
 
@@ -19,13 +49,21 @@ attach to a `@oram/runtime` `Runtime` instance, call one method on it, format th
 
 ## Status
 
-`analyze` and `plan` are real: each runs @oram/engines' pipeline directly (Repository Analysis ->
-Engineering Knowledge -> Engineering Reasoning, and, for `plan`, one stage further into Engineering Planning)
-and prints a presentation-ready console report -- see `src/report/`. Neither is wired to `@oram/runtime`
-(no Lifecycle, no ArtifactStore, no EventBus); that's deliberate, see analyze.ts's/plan.ts's own header
-comments. Every other command (`init`, `run`, `execute`, `validate`, `inspect`, `dashboard`, `doctor`,
-`replay`) is still command architecture only, currently printing `"Not implemented yet."`. See
-`ORAM_V3_MIGRATION_PLAN.md` Milestone 1.
+`analyze`, `plan`, `missions`, `requests`, `execute-plan`, and `execute` are real: each runs @oram/engines'
+pipeline directly (Repository Analysis -> Engineering Knowledge -> Engineering Reasoning, then one stage
+further for each of `plan` (Engineering Planning), `missions` (Engineering Missions), `requests`
+(Implementation Requests), `execute-plan` (Execution Planning), and `execute` (the Implementation Executor,
+via its default, side-effect-free `MemoryAdapter`)) and prints a presentation-ready console report -- see
+`src/report/`. None are wired to `@oram/runtime` (no Lifecycle, no ArtifactStore, no EventBus); that's
+deliberate, see each command's own header comment. `help`/`version` (and their `--help`/`-h`/`--version`/`-v`
+flag aliases -- see `src/index.ts`) are real too. Every other command (`init`, `run`, `validate`, `inspect`,
+`dashboard`, `doctor`, `replay`) is still command architecture only, currently printing
+`"Not implemented yet."`. See `ORAM_V3_MIGRATION_PLAN.md` Milestone 1.
+
+**Packaging (Capability Sprint 4.5):** `bin.ts` is now a real, buildable entry point -- `npm run build`
+bundles it with esbuild into `packages/cli/dist/bin.js` (not committed; see this repo's root `.gitignore`),
+and the workspace root's `package.json` declares `"bin": { "oram": "./packages/cli/dist/bin.js" }` so a bare
+`npm link` at the repository root, no `-w`/`--workspace` flag needed, links the real global `oram` command.
 
 `scripts/gvams-cli.js` remains the only functional CLI in the meantime and is not modified by this package's
 existence.

@@ -15,12 +15,22 @@ import { existsSync } from "node:fs";
 import * as path from "node:path";
 import { buildRepositoryAnalysis, buildEngineeringKnowledge, buildEngineeringReasoning } from "@oram/engines";
 import { renderAnalysisReport } from "../report/renderAnalysisReport";
+import { printCliError } from "../errors";
+
+const USAGE = "oram analyze <path>";
 
 export async function analyzeCommand(args: string[]): Promise<number> {
-  const targetPath = path.resolve(args[0] ?? process.cwd());
+  const [rawPath] = args;
+
+  if (!rawPath) {
+    printCliError("missing required argument <path>", USAGE);
+    return 1;
+  }
+
+  const targetPath = path.resolve(rawPath);
 
   if (!existsSync(targetPath)) {
-    console.error(`oram analyze: path not found: ${targetPath}`);
+    printCliError(`repository not found at "${targetPath}"`, USAGE);
     return 1;
   }
 

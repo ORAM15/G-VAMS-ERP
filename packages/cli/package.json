@@ -6,7 +6,6 @@
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
-  "//bin": "Not wired to a build yet -- see this package's README.md Status. `bin` below documents the intended future entry point only.",
   "bin": {
     "oram": "./dist/bin.js"
   },
@@ -14,7 +13,11 @@
     "@oram/runtime": "*",
     "@oram/engines": "*"
   },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  },
   "scripts": {
+    "build": "esbuild src/bin.ts --bundle --platform=node --format=esm --outfile=dist/bin.js",
     "typecheck": "tsc --noEmit"
   }
 }

@@ -1,8 +1,11 @@
+#!/usr/bin/env node
 /**
- * Dev-mode entry point for the `oram` command -- see package.json's `bin` field and ./index.ts's own
- * "add a real bin/oram entry point once a build step exists" TODO. No build step exists yet, so this
- * runs directly through tsx (`npx tsx packages/cli/src/bin.ts <command> ...`) instead of a compiled
- * dist/bin.js. Thin process wrapper only -- all real dispatch logic stays in ./index.ts's main().
+ * The `oram` entry point -- see package.json's `bin` field. Runnable two ways:
+ *   - dev mode: `npx tsx packages/cli/src/bin.ts <command> ...` (or via the workspace root's `oram` bin
+ *     symlink once `npm install` has hoisted it)
+ *   - built/linked mode: `npm run build` bundles this file (via esbuild) into dist/bin.js, which is what
+ *     `npm link` exposes globally as `oram`
+ * Thin process wrapper only -- all real dispatch logic stays in ./index.ts's main().
  */
 import { main } from "./index";
 

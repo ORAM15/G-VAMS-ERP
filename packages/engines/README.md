@@ -24,7 +24,7 @@ One sub-package per Engineering Lifecycle phase, each a direct extraction of an 
 | `decision` (future) | `scripts/adaptive-decision-engine.js` (`scripts/decision-engine.js` is retired, not migrated — see `ORAM_V3_MIGRATION_PLAN.md` Section 4.3) |
 | `execution-planner` (future; see `execution-planning` above) | `scripts/execution-planner.js` |
 | `work-order` (future; see `implementation-requests` above) | `scripts/implementation-request-engine.js` |
-| `validation` (future) | `scripts/validation-engine.js` |
+| `validation` (real; Capability Sprint 10) | `ValidationEngine`/`validateAll()` — evaluates `provider-execution`'s `PatchArtifact`s (never generates, applies, or executes anything) into `ValidationReport`s via six deterministic, plain-text structural rules (`./analysis/rules.ts`): empty patch, placeholder diff, diff too large, missing file headers, invalid (mismatched-count) unified diff header, duplicate hunks. No AST, no compilation, no execution, no patch application, no filesystem writes. Deliberately NOT built on the real, existing `scripts/validation-engine.js` (a genuinely functional legacy component that reads `implementation-request.json`/`execution.json`/`patch-summary.json` off disk and cross-checks them against each other) -- that script still exists, is untouched, and is not wrapped or superseded by this package; this is a new, repository-agnostic sibling operating on today's `PatchArtifact` shape instead. |
 | `reflection` (future) | `scripts/reflection-engine.js` |
 | `run-history` (future) | `scripts/run-history-manager.js` |
 | `engineering-memory` (future) | `scripts/engineering-memory.js` |
@@ -177,5 +177,23 @@ itself, disclosed there, since this Sprint's own spec names the core worker clas
 stage reserved for its EngineDescriptor wrapper. See `provider-execution.test.ts` (including a stored JSON
 snapshot and an explicit test that `ProviderExecutionEngine` propagates rather than swallows a
 `ClaudeProvider` throw) for coverage. No CLI command was added -- none was requested this Sprint.
+
+**Capability Sprint 10 (current):** added `validation` -- the first package to actually look at a
+`PatchArtifact`'s content, but only via lightweight, deterministic structural checks, never execution.
+`ValidationEngine.validate(patch)` runs all six rules (`./analysis/rules.ts`) against one patch and
+`buildValidationReport()` (`./analysis/build-validation-report.ts`) turns whatever fired into a scored
+`ValidationReport`: 100 minus a fixed per-issue deduction by severity (`ERROR` 40, `WARNING` 15, `INFO` 5),
+clamped at 0; `passed` is strictly "no `ERROR`-severity issue," so a patch can carry `WARNING`/`INFO` issues
+and still pass. Against real `MemoryProvider` output this is exactly what happens: every simulated patch's
+diff contains the literal `PLACEHOLDER` marker, so `validateAll()` on real pipeline output consistently
+produces `passed: true, score: 85` reports carrying one `WARNING` -- an honest signal that the content is
+simulated, not a false failure. `ValidationSeverity` is deliberately its own type name, not reusing
+`engineering-reasoning`'s already-exported `Severity`, to avoid the same kind of barrel collision
+`engineering-missions`' `Mission` had against `engineering-planning`'s `Mission` (see that package's own
+header comment for the precedent). No `ValidationEngineEngine.ts` wrapper file exists, for the same reason
+Sprint 9 co-located `createProviderExecutionEngine()` in `ProviderExecutionEngine.ts`: this Sprint's own spec
+names the core worker class itself `ValidationEngine`. See `validation.test.ts` (17 tests, including a stored
+JSON snapshot, the missing-vs-invalid-header distinction, and identity determinism) for coverage. No Runtime
+changes, no EngineRunner changes, no CLI modifications -- none were requested this Sprint.
 
 Every other sub-package in the table above is still scaffolded (README only).

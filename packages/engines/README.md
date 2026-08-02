@@ -20,7 +20,7 @@ One sub-package per Engineering Lifecycle phase, each a direct extraction of an 
 | `implementation-executor` (real; Capability Sprint 8) | `ImplementationExecutorEngine`/`executeAll()`/`ImplementationExecutor.execute()` — walks each `execution-planning` `ExecutionPlan`'s steps, in order, through a `GitAdapter`/`FileAdapter`/`CommandAdapter` (`./adapters/types.ts`), producing one `ExecutionResult` per plan (`./analysis/types.ts`). Two adapter implementations: `MemoryAdapter` (the default -- deterministic, in-memory, zero side effects) and `RealAdapter` (every method throws `NotImplementedYetError`, on purpose; never the default). No AI, no autonomous decisions -- the only "decision" is a fixed rule: stop and skip the rest once a step fails. Deliberately NOT built on the real, existing `scripts/implementation-executor.js` (a genuinely functional legacy component with `EXECUTION_APPROVED`-gated Provider execution, e.g. `claude-code-v1`) -- that script still exists, is untouched, and is not wrapped or superseded by this package; this is a new, repository-agnostic, non-Provider, non-executing sibling, not a migration of it. |
 | `provider-execution` (real; Capability Sprint 9) | `ProviderExecutionEngine`/`runAll()` — the layer BEFORE any real change could ever happen: turns each `execution-planning` `ExecutionStep` into a `PromptArtifact` (`./analysis/build-prompt.ts`), calls a `Provider.generate()` (`./providers/types.ts`) to get an `LLMResponse`, and wraps that as a `PatchArtifact` -- a plain, unparsed, unvalidated container (`./analysis/build-patch.ts`). Two categories of `Provider`: `MemoryProvider` (the default -- deterministic canned responses, no AI calls) and `ClaudeProvider`/`GeminiProvider`/`OpenAIProvider` (every method throws the SAME `NotImplementedYetError` reused, read-only, from `implementation-executor`'s `RealAdapter`; never the default). Generates AI requests and captures AI responses ONLY -- never modifies git, the filesystem, or runs a shell command; never applies a patch (Validation and Application are both explicitly future-sprint work). |
 | `historical-context` (future) | `scripts/historical-context-retriever.js` |
-| `recommendation` (future) | `scripts/recommendation-engine.js` |
+| `recommendation` (real; Capability Sprint 11) | `RecommendationEngine`/`buildRecommendationSet()` — maps each `validation`'s `ValidationIssue` (never `PatchArtifact`/`unifiedDiff` directly) to exactly one `Recommendation`, keyed by a fixed, deterministic template table off the issue's own `title` (`./analysis/rules.ts`); an unrecognized title falls back to an honest generic recommendation rather than guessing. `Recommendation.priority` is carried 1:1 from the source issue's own `severity` -- never a separately invented ranking. No AI, no filesystem, no re-evaluation of any patch. Deliberately NOT built on the real, existing `scripts/recommendation-engine.js` (a genuinely functional legacy component that reads `engineering-knowledge/engineering-knowledge.json` and produces scored, ranked recommendations from it) -- that script still exists, is untouched, and is not wrapped or superseded by this package; this is a new, repository-agnostic sibling operating on today's `ValidationIssue` shape instead. |
 | `decision` (future) | `scripts/adaptive-decision-engine.js` (`scripts/decision-engine.js` is retired, not migrated — see `ORAM_V3_MIGRATION_PLAN.md` Section 4.3) |
 | `execution-planner` (future; see `execution-planning` above) | `scripts/execution-planner.js` |
 | `work-order` (future; see `implementation-requests` above) | `scripts/implementation-request-engine.js` |
@@ -195,5 +195,26 @@ Sprint 9 co-located `createProviderExecutionEngine()` in `ProviderExecutionEngin
 names the core worker class itself `ValidationEngine`. See `validation.test.ts` (17 tests, including a stored
 JSON snapshot, the missing-vs-invalid-header distinction, and identity determinism) for coverage. No Runtime
 changes, no EngineRunner changes, no CLI modifications -- none were requested this Sprint.
+
+**Capability Sprint 11 (current):** added `recommendation` -- turns each `validation` `ValidationIssue` into
+one actionable `Recommendation` via a fixed, deterministic title -> template lookup
+(`./analysis/rules.ts`, the same "dispatch by upstream text" technique `execution-planning`'s own rules.ts
+uses for `ImplementationRequest.title`). `Recommendation.priority` is carried 1:1 from the source issue's own
+`severity` -- never a separately invented ranking -- and `confidence` is a fixed number per template, never
+computed from anything probabilistic. Against real `MemoryProvider`/`MemoryAdapter` pipeline output this
+means every one of `validation`'s `PLACEHOLDER`-flagged `WARNING` issues becomes a "Replace placeholder
+content..." recommendation, deterministically. `RecommendationSeverity` is its own type (mirroring
+`ValidationSeverity`'s shape, not reusing it) for the same barrel-collision-avoidance reason `validation`
+gave for not reusing `engineering-reasoning`'s `Severity`. No `RecommendationEngineEngine.ts` wrapper file
+exists, for the same reason Sprints 9-10 co-located their own EngineDescriptor factories. `RecommendationsGeneratedEvent`
+is reused the same honest way every prior stage reused it -- `topOpportunityId` stays `null` even though the
+name reads like a natural fit, because that field is typed `number | null` while every id in this pipeline is
+a string (see `RecommendationEngine.ts`'s own header comment). Also added the CLI's `oram recommend <path>`
+command (`packages/cli/src/commands/recommend.ts` + `renderRecommendationsReport.ts`), the first command
+since Sprint 8's `execute` to run the pipeline all the way through Provider Execution and Validation as well.
+Deliberately NOT built on the real, existing `scripts/recommendation-engine.js` -- see the table row above.
+See `recommendation.test.ts` (13 tests, including a stored JSON snapshot and identity determinism) plus the
+CLI's own `renderRecommendationsReport.test.ts` for coverage. No Runtime changes, no EngineRunner changes, no
+modifications to any protected package (Repository Analysis through Validation) -- only additive CLI files.
 
 Every other sub-package in the table above is still scaffolded (README only).

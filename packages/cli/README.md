@@ -27,6 +27,7 @@ oram requests .
 oram execute-plan .
 oram execute .
 oram recommend .
+oram reflect .
 oram --help
 oram --version
 ```
@@ -38,8 +39,9 @@ The original fixed ten commands (`init`, `run`, `analyze`, `plan`, `execute`, `v
 `ORAM_V3_MIGRATION_PLAN.md` Section 6 for each command's purpose/inputs/outputs — plus `help`/`version`
 (Sprint 4.5), `missions` (Sprint 5), `requests` (Sprint 6), `execute-plan` (Sprint 7), a real
 implementation of `execute` (Sprint 8, superseding its earlier stub -- see execute.ts's own header comment
-for what that stub's original, heavier, Provider-gated vision was and why it's still a TODO, not this), and
-`recommend` (Sprint 11). Sprints 9 (Provider Execution) and 10 (Validation) added no CLI command of their own.
+for what that stub's original, heavier, Provider-gated vision was and why it's still a TODO, not this),
+`recommend` (Sprint 11), and `reflect` (Sprint 12). Sprints 9 (Provider Execution) and 10 (Validation) added
+no CLI command of their own.
 Every command is a thin wrapper: parse arguments, construct or attach to a `@oram/runtime` `Runtime`
 instance, call one method on it, format the result for the terminal.
 
@@ -51,12 +53,14 @@ instance, call one method on it, format the result for the terminal.
 
 ## Status
 
-`analyze`, `plan`, `missions`, `requests`, `execute-plan`, `execute`, and `recommend` are real: each runs
-@oram/engines' pipeline directly (Repository Analysis -> Engineering Knowledge -> Engineering Reasoning, then
-one stage further for each of `plan` (Engineering Planning), `missions` (Engineering Missions), `requests`
-(Implementation Requests), `execute-plan` (Execution Planning), `execute` (the Implementation Executor, via
-its default, side-effect-free `MemoryAdapter`), and `recommend` (Provider Execution -> Validation ->
-Recommendation, via the default `MemoryProvider`)) and prints a presentation-ready console report -- see
+`analyze`, `plan`, `missions`, `requests`, `execute-plan`, `execute`, `recommend`, and `reflect` are real:
+each runs @oram/engines' pipeline directly (Repository Analysis -> Engineering Knowledge -> Engineering
+Reasoning, then one stage further for each of `plan` (Engineering Planning), `missions` (Engineering
+Missions), `requests` (Implementation Requests), `execute-plan` (Execution Planning), `execute` (the
+Implementation Executor, via its default, side-effect-free `MemoryAdapter`), `recommend` (Provider Execution
+-> Validation -> Recommendation, via the default `MemoryProvider`), and `reflect` (one further stage:
+Reflection, reasoning over the whole Validation + Recommendation batch)) and prints a presentation-ready
+console report -- see
 `src/report/`. None are wired to `@oram/runtime` (no Lifecycle, no ArtifactStore, no EventBus); that's
 deliberate, see each command's own header comment. `help`/`version` (and their `--help`/`-h`/`--version`/`-v`
 flag aliases -- see `src/index.ts`) are real too. Every other command (`init`, `run`, `validate`, `inspect`,

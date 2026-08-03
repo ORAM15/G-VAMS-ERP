@@ -25,7 +25,7 @@ One sub-package per Engineering Lifecycle phase, each a direct extraction of an 
 | `execution-planner` (future; see `execution-planning` above) | `scripts/execution-planner.js` |
 | `work-order` (future; see `implementation-requests` above) | `scripts/implementation-request-engine.js` |
 | `validation` (real; Capability Sprint 10) | `ValidationEngine`/`validateAll()` — evaluates `provider-execution`'s `PatchArtifact`s (never generates, applies, or executes anything) into `ValidationReport`s via six deterministic, plain-text structural rules (`./analysis/rules.ts`): empty patch, placeholder diff, diff too large, missing file headers, invalid (mismatched-count) unified diff header, duplicate hunks. No AST, no compilation, no execution, no patch application, no filesystem writes. Deliberately NOT built on the real, existing `scripts/validation-engine.js` (a genuinely functional legacy component that reads `implementation-request.json`/`execution.json`/`patch-summary.json` off disk and cross-checks them against each other) -- that script still exists, is untouched, and is not wrapped or superseded by this package; this is a new, repository-agnostic sibling operating on today's `PatchArtifact` shape instead. |
-| `reflection` (future) | `scripts/reflection-engine.js` |
+| `reflection` (real; Capability Sprint 12) | `ReflectionEngine`/`buildReflectionReport()` — reasons over a whole `validation` `ValidationResult` + `recommendation` `RecommendationSet` batch (never a single patch/issue in isolation) via 6 fixed, deterministic rules (`./analysis/rules.ts`), producing one `ReflectionReport` per batch: `findings`, a template-built `summary`, `retryRecommended`, a deducted `overallScore` (100 minus a fixed per-finding penalty by severity), and a fixed-tier `confidence`. Exactly like `engineering-reasoning` reasons over `engineering-knowledge` -- no AST, no execution, no filesystem, no AI, no git, no Provider calls; it only reasons over data this package has already produced. Unlike `validation`/`recommendation`, no legacy `scripts/reflection-engine.js` exists in this repository today (despite `@oram/events`' `ReflectionCompletedEvent` referencing one) -- this is a genuinely new capability, not a migration. |
 | `run-history` (future) | `scripts/run-history-manager.js` |
 | `engineering-memory` (future) | `scripts/engineering-memory.js` |
 | `pull-request` (future) | `scripts/pull-request-generator.js` |
@@ -216,5 +216,30 @@ Deliberately NOT built on the real, existing `scripts/recommendation-engine.js` 
 See `recommendation.test.ts` (13 tests, including a stored JSON snapshot and identity determinism) plus the
 CLI's own `renderRecommendationsReport.test.ts` for coverage. No Runtime changes, no EngineRunner changes, no
 modifications to any protected package (Repository Analysis through Validation) -- only additive CLI files.
+
+**Capability Sprint 12 (current):** added `reflection` -- reasons over a WHOLE `validation`
+`ValidationResult` + `recommendation` `RecommendationSet` batch together (unlike every prior stage, which
+transforms one upstream item into one downstream item), producing a single, batch-level `ReflectionReport`.
+`computeStats()` (`./analysis/rules.ts`) reduces both inputs into fixed counts once; all 6 rules
+(`checkValidationClean`, `checkCriticalValidationFailures`, `checkMinorQualityIssues`, `checkLargeIssueVolume`,
+`checkMultipleRecommendations`, `checkConfidenceReducedByErrors`) are pure functions of those counts, each
+firing at most once. `overallScore` starts at 100 and subtracts a fixed amount per finding by severity
+(`ERROR` 25, `WARNING` 10, `INFO` 2), clamped to `[0, 100]` -- notably, this applies even to the positive
+"Validation clean" finding (itself `INFO`), so a fully clean batch scores 98, not 100; this is the literal,
+undocumented-exception scoring rule the Sprint's own spec specifies, not an oversight (see
+`build-reflection.ts`'s own comments). `confidence` is a fixed tier keyed by the worst finding severity
+present (no findings 1.0, only `INFO` 0.95, any `WARNING` 0.85, any `ERROR` 0.70). `retryRecommended` is TRUE
+when Validation contains an `ERROR`-severity issue OR `overallScore` is below `RETRY_SCORE_THRESHOLD` (80,
+not a rounder 70 -- see that constant's own comment on why 70 would make the score-based half of this OR
+unreachable given today's 6 rules' maximum non-error deduction of 22). Unlike every prior stage,
+`@oram/events` already has a purpose-built event for this one, `ReflectionCompletedEvent` (its
+`retryRecommended` field maps directly) -- used genuinely rather than stretched; its one mismatch
+(`missionId: string` required, but this stage is batch-scoped, not Mission-scoped) is filled with a disclosed
+`"unknown"` sentinel rather than a fabricated id. Also added the CLI's `oram reflect <path>` command
+(`packages/cli/src/commands/reflect.ts` + `renderReflectionReport.ts`), showing Findings, Summary, Retry
+Recommendation, Overall Score, and Confidence. See `reflection.test.ts` (20 tests, including per-rule unit
+tests, scoring/confidence boundary tests, a stored JSON snapshot, and identity determinism) plus the CLI's own
+`renderReflectionReport.test.ts` for coverage. No Runtime changes, no EngineRunner changes, no modifications
+to any protected package (Repository Analysis through Recommendation) -- only additive CLI files.
 
 Every other sub-package in the table above is still scaffolded (README only).

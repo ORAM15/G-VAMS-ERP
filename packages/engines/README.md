@@ -26,8 +26,7 @@ One sub-package per Engineering Lifecycle phase, each a direct extraction of an 
 | `work-order` (future; see `implementation-requests` above) | `scripts/implementation-request-engine.js` |
 | `validation` (real; Capability Sprint 10) | `ValidationEngine`/`validateAll()` — evaluates `provider-execution`'s `PatchArtifact`s (never generates, applies, or executes anything) into `ValidationReport`s via six deterministic, plain-text structural rules (`./analysis/rules.ts`): empty patch, placeholder diff, diff too large, missing file headers, invalid (mismatched-count) unified diff header, duplicate hunks. No AST, no compilation, no execution, no patch application, no filesystem writes. Deliberately NOT built on the real, existing `scripts/validation-engine.js` (a genuinely functional legacy component that reads `implementation-request.json`/`execution.json`/`patch-summary.json` off disk and cross-checks them against each other) -- that script still exists, is untouched, and is not wrapped or superseded by this package; this is a new, repository-agnostic sibling operating on today's `PatchArtifact` shape instead. |
 | `reflection` (real; Capability Sprint 12) | `ReflectionEngine`/`buildReflectionReport()` — reasons over a whole `validation` `ValidationResult` + `recommendation` `RecommendationSet` batch (never a single patch/issue in isolation) via 6 fixed, deterministic rules (`./analysis/rules.ts`), producing one `ReflectionReport` per batch: `findings`, a template-built `summary`, `retryRecommended`, a deducted `overallScore` (100 minus a fixed per-finding penalty by severity), and a fixed-tier `confidence`. Exactly like `engineering-reasoning` reasons over `engineering-knowledge` -- no AST, no execution, no filesystem, no AI, no git, no Provider calls; it only reasons over data this package has already produced. Unlike `validation`/`recommendation`, no legacy `scripts/reflection-engine.js` exists in this repository today (despite `@oram/events`' `ReflectionCompletedEvent` referencing one) -- this is a genuinely new capability, not a migration. |
-| `run-history` (future) | `scripts/run-history-manager.js` |
-| `engineering-memory` (future) | `scripts/engineering-memory.js` |
+| `memory` (real; Capability Sprint 13) | `MemoryEngine`/`buildRunSnapshot()`/`MemoryStore` — unifies the two previously-separate future rows above (`run-history` and `engineering-memory`) into one package: NOT AI memory, NOT embeddings, NOT vector search -- a deterministic historical record of every ORAM run, comparable to `git log` for ORAM's own engineering intelligence. `buildRunSnapshot()` turns a whole pipeline run's already-computed output (Repository Analysis through `reflection`'s `ReflectionReport`) into one `RunSnapshot` (`./analysis/types.ts`); `MemoryStore` is a pure, in-memory, append-only collection of RunSnapshots (`save`/`latest`/`history`/`historyByRepository`/`statistics`/`bestRun`/`worstRun`/`averageScore`) -- no database, no filesystem persistence. `repositoryId` is deterministic (`makeId("repository", repositoryRoot)`); `runId` is the one field that cannot be a pure function of input data alone (a run's identity is inherently tied to WHEN it happened), directly following `@oram/runtime`'s own `Runtime.ts#generateRunId()` precedent. Neither `scripts/run-history-manager.js` nor `scripts/engineering-memory.js` exists in this repository today (both were built on local feature branches that predate, and were superseded by, the ORAM pivot, and were never merged into `main`) -- this is a genuinely new capability, not a migration. |
 | `pull-request` (future) | `scripts/pull-request-generator.js` |
 | `publisher` (future) | `scripts/github-publisher.js` + `publisher/github/client.js` + `scripts/agent-branch-publish.js` (unified — see migration plan Section 4.2) |
 
@@ -241,5 +240,39 @@ Recommendation, Overall Score, and Confidence. See `reflection.test.ts` (20 test
 tests, scoring/confidence boundary tests, a stored JSON snapshot, and identity determinism) plus the CLI's own
 `renderReflectionReport.test.ts` for coverage. No Runtime changes, no EngineRunner changes, no modifications
 to any protected package (Repository Analysis through Recommendation) -- only additive CLI files.
+
+**Capability Sprint 13 (current):** added `memory` -- a deterministic historical RECORD of every run, not a
+re-reasoning over them: think "git log," never "AI memory" (no embeddings, no vector search, no similarity
+scoring, no model of any kind, a distinction this Sprint's own spec insists on explicitly).
+`buildRunSnapshot()` (`./analysis/build-run-snapshot.ts`) turns one whole pipeline run -- Repository Analysis
+through `reflection`'s own `ReflectionReport`, bundled as `RunSnapshotInputs` -- into one `RunSnapshot`:
+per-stage summary strings, `missionCount`/`requestCount`/`executionPlanCount`/`recommendationCount`,
+`validationScore` (the average of every `ValidationReport.score` in the run, defaulting to 100 when there was
+nothing to validate -- the same "empty is clean" convention `validation`/`reflection` already established),
+and `reflectionSummary`/`retryRecommended`/`overallConfidence` carried through verbatim from the
+`ReflectionReport`. `repositoryId` is deterministic (`makeId("repository", repositoryRoot)` -- the same
+repository path always yields the same id); `runId` is the one field that cannot be a pure function of input
+data alone, since a run's identity is inherently tied to WHEN it happened, not just WHAT it analyzed --
+`generateRunId()` directly follows `@oram/runtime`'s own `Runtime.ts` precedent (a timestamp-derived id, no
+shared counter/lock), with an appended in-process sequence number guarding only against same-millisecond
+collisions in a tight loop. `MemoryStore` (`./MemoryStore.ts`) is a pure, in-memory, append-only collection --
+`save()`/`latest()`/`history()`/`historyByRepository()`/`statistics()`/`bestRun()`/`worstRun()`/`averageScore()`,
+every query optionally scoped to one `repositoryId` so one store can hold several repositories' histories at
+once without them leaking into each other. `MemoryEngine.record()` is the whole job: build a `RunSnapshot`
+and `save()` it, mirroring the adapter/provider-injection pattern `ImplementationExecutor`/
+`ProviderExecutionEngine` already established. CONCRETE LIMITATION, disclosed rather than hidden: nothing
+persists a `MemoryStore` across process invocations -- `oram history <path>` constructs a fresh store, records
+exactly the run it just computed, and renders from that single-entry store, so "Total Runs" in its own output
+is always 1 today; the underlying multi-run/multi-repository machinery is real and fully exercised by
+`memory.test.ts` directly, it simply has nowhere durable to read prior runs FROM yet (the same
+ArtifactStore-integration gap disclosed in every prior stage's own `EngineDescriptor` factory). Also added the
+CLI's `oram history <path>` command (`packages/cli/src/commands/history.ts` + `renderHistoryReport.ts`),
+showing Repository/Total Runs/Latest Run/Average Score/Best Score/Worst Score/Retry %/Trend/Last Reflection
+-- `Trend` is computed in the renderer only (comparing the latest snapshot's score against the average of
+every prior one), deliberately not baked into `MemoryStatistics` itself, whose own field list matches this
+Sprint's "Statistics" section exactly. See `memory.test.ts` (11 tests: empty history, one run, many runs,
+multiple repositories, statistics, a stored JSON snapshot, deterministic ids, a real-repository smoke test)
+plus the CLI's own `renderHistoryReport.test.ts` for coverage. No Runtime changes, no EngineRunner changes, no
+modifications to any protected package (Repository Analysis through Reflection) -- only additive CLI files.
 
 Every other sub-package in the table above is still scaffolded (README only).

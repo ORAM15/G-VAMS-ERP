@@ -27,6 +27,7 @@ import { executePlanCommand } from "./commands/execute-plan";
 import { executeCommand } from "./commands/execute";
 import { recommendCommand } from "./commands/recommend";
 import { reflectCommand } from "./commands/reflect";
+import { historyCommand } from "./commands/history";
 import { validateCommand } from "./commands/validate";
 import { inspectCommand } from "./commands/inspect";
 import { dashboardCommand } from "./commands/dashboard";
@@ -57,6 +58,7 @@ Usage:
   oram execute <path>        Run the full pipeline through the Implementation Executor
   oram recommend <path>      Run the full pipeline through the Recommendation Engine
   oram reflect <path>        Run the full pipeline through the Reflection Engine
+  oram history <path>        Run the full pipeline and record it into Engineering Memory
   oram version               Print the oram CLI version
   oram help                  Show this help message`;
 
@@ -70,7 +72,7 @@ async function versionCommand(): Promise<number> {
   return 0;
 }
 
-/** Command name -> handler. The original fixed v1 command surface (docs/ORAM_SPECIFICATION_v1.md's companion CLI table lives in ORAM_V3_MIGRATION_PLAN.md Section 6), plus `help`/`version` (Sprint 4.5), `missions` (Sprint 5), `requests` (Sprint 6), `execute-plan` (Sprint 7), a real implementation of `execute` (Sprint 8, superseding its earlier stub -- see execute.ts's own header comment), `recommend` (Sprint 11), and `reflect` (Sprint 12) -- each one pipeline stage past the last. Sprints 9 (Provider Execution) and 10 (Validation) added no CLI command of their own. */
+/** Command name -> handler. The original fixed v1 command surface (docs/ORAM_SPECIFICATION_v1.md's companion CLI table lives in ORAM_V3_MIGRATION_PLAN.md Section 6), plus `help`/`version` (Sprint 4.5), `missions` (Sprint 5), `requests` (Sprint 6), `execute-plan` (Sprint 7), a real implementation of `execute` (Sprint 8, superseding its earlier stub -- see execute.ts's own header comment), `recommend` (Sprint 11), `reflect` (Sprint 12), and `history` (Sprint 13) -- each one pipeline stage past the last. Sprints 9 (Provider Execution) and 10 (Validation) added no CLI command of their own. */
 export const COMMANDS: Readonly<Record<string, CommandHandler>> = {
   init: initCommand,
   run: runCommand,
@@ -82,6 +84,7 @@ export const COMMANDS: Readonly<Record<string, CommandHandler>> = {
   execute: executeCommand,
   recommend: recommendCommand,
   reflect: reflectCommand,
+  history: historyCommand,
   validate: validateCommand,
   inspect: inspectCommand,
   dashboard: dashboardCommand,

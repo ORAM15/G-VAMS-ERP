@@ -1,0 +1,40 @@
+name: Regenerate frontend lockfile
+
+on:
+  push:
+    branches:
+      - chore/separate-oram-from-gvams
+
+permissions:
+  contents: write
+
+jobs:
+  regenerate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: chore/separate-oram-from-gvams
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Regenerate lockfile
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Commit regenerated lockfile
+        working-directory: .
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/package-lock.json
+          if git diff --cached --quiet; then
+            echo "Lockfile already up to date."
+          else
+            git commit -m "chore: regenerate frontend package lock"
+            git push origin HEAD:chore/separate-oram-from-gvams
+          fi

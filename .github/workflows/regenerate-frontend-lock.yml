@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - chore/separate-oram-from-gvams
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "frontend/package.json"
+      - "frontend/package-lock.json"
+      - ".github/workflows/regenerate-frontend-lock.yml"
 
 permissions:
   contents: write
